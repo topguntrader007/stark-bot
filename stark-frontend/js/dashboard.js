@@ -1,5 +1,5 @@
 document.addEventListener('DOMContentLoaded', function() {
-    const token = localStorage.getItem('starfish_token');
+    const token = localStorage.getItem('stark_token');
 
     if (!token) {
         redirectToLogin();
@@ -31,7 +31,7 @@ async function loadDashboard(token) {
         });
 
         if (response.status === 401) {
-            localStorage.removeItem('starfish_token');
+            localStorage.removeItem('stark_token');
             redirectToLogin();
             return;
         }
@@ -68,7 +68,7 @@ async function handleLogout(token) {
     } catch (error) {
         console.error('Logout error:', error);
     } finally {
-        localStorage.removeItem('starfish_token');
+        localStorage.removeItem('stark_token');
         redirectToLogin();
     }
 }

@@ -36,7 +36,7 @@ async fn get_dashboard(state: web::Data<AppState>, req: HttpRequest) -> impl Res
 
     match state.db.validate_session(&token) {
         Ok(Some(_session)) => HttpResponse::Ok().json(DashboardData {
-            message: "Welcome to Starfish Bot Dashboard!".to_string(),
+            message: "Welcome to StarkBot Dashboard!".to_string(),
             timestamp: chrono::Utc::now().to_rfc3339(),
         }),
         Ok(None) => HttpResponse::Unauthorized().json(ErrorResponse {

@@ -1,5 +1,6 @@
 use chrono::{DateTime, Duration, Utc};
 use rusqlite::{Connection, Result as SqliteResult};
+use std::path::Path;
 use std::sync::Mutex;
 use uuid::Uuid;
 
@@ -11,6 +12,13 @@ pub struct Database {
 
 impl Database {
     pub fn new(database_url: &str) -> SqliteResult<Self> {
+        // Create parent directory if it doesn't exist
+        if let Some(parent) = Path::new(database_url).parent() {
+            if !parent.as_os_str().is_empty() {
+                std::fs::create_dir_all(parent).ok();
+            }
+        }
+
         let conn = Connection::open(database_url)?;
         let db = Self {
             conn: Mutex::new(conn),

@@ -30,7 +30,7 @@ async fn main() -> std::io::Result<()> {
     let db = Database::new(&config.database_url).expect("Failed to initialize database");
     let db = Arc::new(db);
 
-    log::info!("Starting Starfish Bot server on port {}", port);
+    log::info!("Starting StarkBot server on port {}", port);
 
     HttpServer::new(move || {
         let cors = Cors::default()
@@ -49,7 +49,7 @@ async fn main() -> std::io::Result<()> {
             .configure(controllers::health::config)
             .configure(controllers::auth::config)
             .configure(controllers::dashboard::config)
-            .service(Files::new("/", "./starfish-frontend").index_file("index.html"))
+            .service(Files::new("/", "./stark-frontend").index_file("index.html"))
     })
     .bind(("0.0.0.0", port))?
     .run()

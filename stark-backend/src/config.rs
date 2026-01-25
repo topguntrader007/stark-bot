@@ -15,7 +15,7 @@ impl Config {
                 .unwrap_or_else(|_| "8080".to_string())
                 .parse()
                 .expect("PORT must be a valid number"),
-            database_url: env::var("DATABASE_URL").unwrap_or_else(|_| "./starfish.db".to_string()),
+            database_url: env::var("DATABASE_URL").unwrap_or_else(|_| "./.db/stark.db".to_string()),
         }
     }
 }

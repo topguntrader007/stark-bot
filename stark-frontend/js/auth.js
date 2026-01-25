@@ -1,6 +1,6 @@
 document.addEventListener('DOMContentLoaded', function() {
     // Check if already logged in
-    const token = localStorage.getItem('starfish_token');
+    const token = localStorage.getItem('stark_token');
     if (token) {
         validateAndRedirect(token);
     }
@@ -23,11 +23,11 @@ async function validateAndRedirect(token) {
         if (data.valid) {
             window.location.href = '/dashboard.html';
         } else {
-            localStorage.removeItem('starfish_token');
+            localStorage.removeItem('stark_token');
         }
     } catch (error) {
         console.error('Validation error:', error);
-        localStorage.removeItem('starfish_token');
+        localStorage.removeItem('stark_token');
     }
 }
 
@@ -60,7 +60,7 @@ async function handleLogin(event) {
         const data = await response.json();
 
         if (data.success && data.token) {
-            localStorage.setItem('starfish_token', data.token);
+            localStorage.setItem('stark_token', data.token);
             window.location.href = '/dashboard.html';
         } else {
             showError(data.error || 'Login failed. Please check your secret key.');
