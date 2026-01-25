@@ -11,6 +11,8 @@ A cloud-deployable agentic assistant built with Rust and Actix. StarkBot acts as
 
 
 
+
+## Starkbot is NOT production-ready 
 ```
   STARKBOT IS CURRENTLY IN EARLY ALPHA AND IS MISSING FEATURES 
 
