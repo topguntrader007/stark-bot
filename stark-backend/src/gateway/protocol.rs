@@ -293,6 +293,7 @@ impl GatewayEvent {
     pub fn x402_payment(
         channel_id: i64,
         amount: &str,
+        amount_formatted: &str,
         asset: &str,
         pay_to: &str,
         resource: Option<&str>,
@@ -302,6 +303,7 @@ impl GatewayEvent {
             serde_json::json!({
                 "channel_id": channel_id,
                 "amount": amount,
+                "amount_formatted": amount_formatted,
                 "asset": asset,
                 "pay_to": pay_to,
                 "resource": resource,

@@ -439,10 +439,8 @@ export default function AgentChat() {
         <div ref={messagesEndRef} />
       </div>
 
-      {/* Debug Panel - shows when debug mode is enabled */}
-      {debugMode && (
-        <DebugPanel className="mx-6 mb-4" />
-      )}
+      {/* Debug Panel - always mounted to capture events, hidden when not in debug mode */}
+      <DebugPanel className={`mx-6 mb-4 ${debugMode ? '' : 'hidden'}`} />
 
       {/* Execution Progress */}
       <ExecutionProgress className="mx-6 mb-4" />

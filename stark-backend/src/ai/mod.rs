@@ -112,6 +112,7 @@ impl AiClient {
                     broadcaster.broadcast(GatewayEvent::x402_payment(
                         channel_id,
                         &payment_info.amount,
+                        &payment_info.amount_formatted,
                         &payment_info.asset,
                         &payment_info.pay_to,
                         payment_info.resource.as_deref(),

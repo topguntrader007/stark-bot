@@ -561,6 +561,19 @@ impl MessageDispatcher {
                 ai_response.stop_reason
             );
 
+            // Emit x402 payment event if payment was made
+            if let Some(ref payment_info) = ai_response.x402_payment {
+                log::info!("[NATIVE_TOOL_LOOP] x402 payment made: {} {}", payment_info.amount_formatted, payment_info.asset);
+                self.broadcaster.broadcast(GatewayEvent::x402_payment(
+                    original_message.channel_id,
+                    &payment_info.amount,
+                    &payment_info.amount_formatted,
+                    &payment_info.asset,
+                    &payment_info.pay_to,
+                    payment_info.resource.as_deref(),
+                ));
+            }
+
             // If no tool calls, return the content
             if ai_response.tool_calls.is_empty() {
                 return Ok(ai_response.content);

@@ -8,14 +8,42 @@ interface ChatMessageProps {
 }
 
 function parseMarkdown(text: string): string {
+  // Escape HTML first to prevent XSS
+  let parsed = text
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;');
+
   // Bold: **text**
-  let parsed = text.replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>');
-  // Code: `text`
-  parsed = parsed.replace(/`([^`]+)`/g, '<code class="bg-slate-700 px-1 rounded text-stark-300">$1</code>');
-  // Bullet points: • text
-  parsed = parsed.replace(/^• (.+)$/gm, '<li class="ml-4">$1</li>');
+  parsed = parsed.replace(/\*\*(.*?)\*\*/g, '<strong class="font-semibold">$1</strong>');
+
+  // Italic: *text* (but not inside **)
+  parsed = parsed.replace(/(?<!\*)\*([^*]+)\*(?!\*)/g, '<em>$1</em>');
+
+  // Code blocks: ```code```
+  parsed = parsed.replace(/```([\s\S]*?)```/g, '<pre class="bg-slate-900 p-3 rounded-lg my-2 overflow-x-auto text-sm font-mono">$1</pre>');
+
+  // Inline code: `text`
+  parsed = parsed.replace(/`([^`]+)`/g, '<code class="bg-slate-700 px-1.5 py-0.5 rounded text-cyan-300 text-sm font-mono">$1</code>');
+
+  // Headers: ## text
+  parsed = parsed.replace(/^### (.+)$/gm, '<h3 class="text-lg font-semibold text-white mt-4 mb-2">$1</h3>');
+  parsed = parsed.replace(/^## (.+)$/gm, '<h2 class="text-xl font-bold text-white mt-4 mb-2">$1</h2>');
+
+  // Bullet points: - text or • text
+  parsed = parsed.replace(/^[-•] (.+)$/gm, '<li class="ml-4 list-disc">$1</li>');
+
   // Wrap consecutive <li> in <ul>
-  parsed = parsed.replace(/(<li[^>]*>.*?<\/li>\n?)+/g, '<ul class="list-disc space-y-1">$&</ul>');
+  parsed = parsed.replace(/(<li[^>]*>.*?<\/li>\n?)+/g, '<ul class="space-y-1 my-2">$&</ul>');
+
+  // Line breaks
+  parsed = parsed.replace(/\n/g, '<br/>');
+
+  // Clean up excessive <br/> after block elements
+  parsed = parsed.replace(/(<\/h[23]>)<br\/>/g, '$1');
+  parsed = parsed.replace(/(<\/ul>)<br\/>/g, '$1');
+  parsed = parsed.replace(/(<\/pre>)<br\/>/g, '$1');
+
   return parsed;
 }
 
@@ -62,9 +90,9 @@ export default function ChatMessage({ role, content, timestamp }: ChatMessagePro
           isUser ? 'rounded-br-md' : 'rounded-bl-md'
         )}
       >
-        {role === 'system' ? (
+        {role === 'assistant' || role === 'system' ? (
           <div
-            className="prose prose-sm prose-invert max-w-none"
+            className="prose prose-sm prose-invert max-w-none leading-relaxed"
             dangerouslySetInnerHTML={{ __html: parseMarkdown(content) }}
           />
         ) : (
