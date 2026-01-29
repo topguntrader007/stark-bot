@@ -453,7 +453,7 @@ impl MessageDispatcher {
 
         // Branch based on archetype type
         if archetype.uses_native_tool_calling() {
-            self.generate_with_native_tools(client, messages, tools, tool_config, tool_context, original_message).await
+            self.generate_with_native_tools(client, messages, tools, tool_config, tool_context, original_message, archetype).await
         } else {
             self.generate_with_text_tools(client, messages, tools, tool_config, tool_context, original_message, archetype).await
         }
@@ -471,10 +471,6 @@ impl MessageDispatcher {
         }
 
         let skill_names: Vec<String> = active_skills.iter().map(|s| s.name.clone()).collect();
-        let skill_descriptions: Vec<String> = active_skills
-            .iter()
-            .map(|s| format!("{}: {}", s.name, s.description))
-            .collect();
 
         let mut properties = std::collections::HashMap::new();
         properties.insert(
@@ -498,11 +494,18 @@ impl MessageDispatcher {
             },
         );
 
+        // Format skill descriptions with newlines for better readability
+        let formatted_skills = active_skills
+            .iter()
+            .map(|s| format!("  - {}: {}", s.name, s.description))
+            .collect::<Vec<_>>()
+            .join("\n");
+
         Some(ToolDefinition {
             name: "use_skill".to_string(),
             description: format!(
-                "Execute a skill. Available skills: {}",
-                skill_descriptions.join("; ")
+                "Execute a specialized skill. YOU MUST use this tool when a user asks for something that matches a skill.\n\nAvailable skills:\n{}",
+                formatted_skills
             ),
             input_schema: ToolInputSchema {
                 schema_type: "object".to_string(),
@@ -522,7 +525,16 @@ impl MessageDispatcher {
         tool_config: &ToolConfig,
         tool_context: &ToolContext,
         original_message: &NormalizedMessage,
+        archetype: &dyn ModelArchetype,
     ) -> Result<String, String> {
+        // Enhance system prompt with tool awareness (even for native tool calling)
+        let mut conversation = messages.clone();
+        if let Some(system_msg) = conversation.first_mut() {
+            if system_msg.role == MessageRole::System {
+                system_msg.content = archetype.enhance_system_prompt(&system_msg.content, &tools);
+            }
+        }
+
         let mut tool_history: Vec<ToolHistoryEntry> = Vec::new();
         let mut iterations = 0;
 
@@ -537,7 +549,7 @@ impl MessageDispatcher {
 
             // Generate with native tool support
             let ai_response = client.generate_with_tools(
-                messages.clone(),
+                conversation.clone(),
                 tool_history.clone(),
                 tools.clone(),
             ).await?;

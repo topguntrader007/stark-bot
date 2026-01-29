@@ -34,13 +34,34 @@ impl ModelArchetype for KimiArchetype {
     }
 
     fn default_model(&self) -> &'static str {
-        "kimi-k2.5" // Kimi K2.5 model
+        "kimi-k2-turbo-preview" // Kimi K2 turbo preview - supports native tool calling per docs
     }
 
-    fn enhance_system_prompt(&self, base_prompt: &str, _tools: &[ToolDefinition]) -> String {
-        // Native tool calling doesn't need special prompt formatting
-        // Tools are sent via the API's tools parameter
-        base_prompt.to_string()
+    fn enhance_system_prompt(&self, base_prompt: &str, tools: &[ToolDefinition]) -> String {
+        if tools.is_empty() {
+            return base_prompt.to_string();
+        }
+
+        let mut prompt = base_prompt.to_string();
+        prompt.push_str("\n\n## Available Tools\n\n");
+        prompt.push_str(
+            "You have access to the following tools. Use them to help the user:\n\n",
+        );
+
+        for tool in tools {
+            // Truncate long descriptions to first sentence for readability
+            let short_desc = tool
+                .description
+                .split(". ")
+                .next()
+                .unwrap_or(&tool.description);
+            prompt.push_str(&format!("- **{}**: {}\n", tool.name, short_desc));
+        }
+
+        prompt.push_str("\n**IMPORTANT**: When a user asks for something that a tool can provide, ");
+        prompt.push_str("USE the tool. Do not say you cannot do something if a tool is available.\n");
+
+        prompt
     }
 
     fn parse_response(&self, content: &str) -> Option<AgentResponse> {

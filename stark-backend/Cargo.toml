@@ -61,5 +61,9 @@ which = "5"
 # Skills ZIP upload
 zip = "0.6"
 
+[[bin]]
+name = "agent_test"
+path = "src/bin/agent_test.rs"
+
 [dev-dependencies]
 tempfile = "3"
