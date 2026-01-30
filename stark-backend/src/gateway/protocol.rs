@@ -13,9 +13,11 @@ pub enum EventType {
     // Agent events
     AgentResponse,
     AgentToolCall,  // Real-time tool call notification for chat display
+    AgentModeChange,  // Multi-agent mode transition
     // Tool events
     ToolExecution,
     ToolResult,
+    ToolWaiting,  // Tool is waiting for retry after transient error
     // Skill events
     SkillInvoked,
     // Execution progress events
@@ -37,6 +39,8 @@ pub enum EventType {
     TxConfirmed,
     // Register events
     RegisterUpdate,
+    // Multi-agent task events
+    AgentTasksUpdate,
 }
 
 impl EventType {
@@ -48,8 +52,10 @@ impl EventType {
             Self::ChannelMessage => "channel.message",
             Self::AgentResponse => "agent.response",
             Self::AgentToolCall => "agent.tool_call",
+            Self::AgentModeChange => "agent.mode_change",
             Self::ToolExecution => "tool.execution",
             Self::ToolResult => "tool.result",
+            Self::ToolWaiting => "tool.waiting",
             Self::SkillInvoked => "skill.invoked",
             Self::ExecutionStarted => "execution.started",
             Self::ExecutionThinking => "execution.thinking",
@@ -65,6 +71,7 @@ impl EventType {
             Self::TxPending => "tx.pending",
             Self::TxConfirmed => "tx.confirmed",
             Self::RegisterUpdate => "register.update",
+            Self::AgentTasksUpdate => "agent.tasks_update",
         }
     }
 }
@@ -247,6 +254,20 @@ impl GatewayEvent {
         )
     }
 
+    /// Emit agent mode change for UI header display
+    pub fn agent_mode_change(channel_id: i64, mode: &str, label: &str, reason: Option<&str>) -> Self {
+        Self::new(
+            EventType::AgentModeChange,
+            serde_json::json!({
+                "channel_id": channel_id,
+                "mode": mode,
+                "label": label,
+                "reason": reason,
+                "timestamp": chrono::Utc::now().to_rfc3339()
+            }),
+        )
+    }
+
     pub fn tool_execution(channel_id: i64, tool_name: &str, parameters: &Value) -> Self {
         Self::new(
             EventType::ToolExecution,
@@ -267,6 +288,19 @@ impl GatewayEvent {
                 "success": success,
                 "duration_ms": duration_ms,
                 "content": content
+            }),
+        )
+    }
+
+    /// Tool is waiting for retry after transient network error (exponential backoff)
+    pub fn tool_waiting(channel_id: i64, tool_name: &str, wait_seconds: u64) -> Self {
+        Self::new(
+            EventType::ToolWaiting,
+            serde_json::json!({
+                "channel_id": channel_id,
+                "tool_name": tool_name,
+                "wait_seconds": wait_seconds,
+                "timestamp": chrono::Utc::now().to_rfc3339()
             }),
         )
     }
@@ -528,6 +562,27 @@ impl GatewayEvent {
             serde_json::json!({
                 "channel_id": channel_id,
                 "registers": registers,
+                "timestamp": chrono::Utc::now().to_rfc3339()
+            }),
+        )
+    }
+
+    /// Multi-agent task list updated
+    pub fn agent_tasks_update(
+        channel_id: i64,
+        mode: &str,
+        mode_label: &str,
+        tasks: Value,
+        stats: Value,
+    ) -> Self {
+        Self::new(
+            EventType::AgentTasksUpdate,
+            serde_json::json!({
+                "channel_id": channel_id,
+                "mode": mode,
+                "mode_label": mode_label,
+                "tasks": tasks,
+                "stats": stats,
                 "timestamp": chrono::Utc::now().to_rfc3339()
             }),
         )

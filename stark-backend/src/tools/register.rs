@@ -20,8 +20,9 @@
 //! let to = quote.get("to").unwrap();
 //! ```
 
+use ethers::prelude::*;
 use serde::{Deserialize, Deserializer};
-use serde_json::Value;
+use serde_json::{json, Value};
 use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
 
@@ -110,6 +111,33 @@ impl<'de, T: Deserialize<'de>> Deserialize<'de> for PresetOrCustom<T> {
     }
 }
 
+/// Intrinsic registers that are lazily computed when accessed.
+/// These are always available without needing explicit tool calls.
+pub enum IntrinsicRegister {
+    WalletAddress,
+}
+
+impl IntrinsicRegister {
+    /// Match a register name to an intrinsic
+    pub fn from_name(name: &str) -> Option<Self> {
+        match name {
+            "wallet_address" => Some(Self::WalletAddress),
+            _ => None,
+        }
+    }
+
+    /// Resolve the intrinsic value
+    pub fn resolve(&self) -> Option<Value> {
+        match self {
+            Self::WalletAddress => {
+                let pk = crate::config::burner_wallet_private_key()?;
+                let wallet: LocalWallet = pk.parse().ok()?;
+                Some(json!(format!("{:?}", wallet.address())))
+            }
+        }
+    }
+}
+
 /// Session-scoped register store for passing data between tools
 /// without flowing through the agent's reasoning.
 ///
@@ -166,15 +194,38 @@ impl RegisterStore {
 
     /// Get a value from the register
     ///
-    /// Returns None if the key doesn't exist
+    /// Returns None if the key doesn't exist.
+    /// Falls back to intrinsic resolution for special registers like `wallet_address`.
     pub fn get(&self, key: &str) -> Option<Value> {
-        let entry = self.get_entry(key)?;
-        Some(entry.value)
+        // First check explicit registers
+        if let Some(entry) = self.get_entry(key) {
+            return Some(entry.value);
+        }
+
+        // Fall back to intrinsic resolution
+        IntrinsicRegister::from_name(key).and_then(|i| i.resolve())
     }
 
     /// Get the full entry (value + metadata) from the register
     pub fn get_entry(&self, key: &str) -> Option<RegisterEntry> {
         self.inner.read().ok()?.get(key).cloned()
+    }
+
+    /// Get entry with metadata, falling back to intrinsic if not set
+    pub fn get_entry_or_intrinsic(&self, key: &str) -> Option<RegisterEntry> {
+        // Check explicit first
+        if let Some(entry) = self.get_entry(key) {
+            return Some(entry);
+        }
+
+        // Fall back to intrinsic
+        IntrinsicRegister::from_name(key).and_then(|i| {
+            i.resolve().map(|value| RegisterEntry {
+                value,
+                source_tool: "intrinsic".to_string(),
+                created_at: std::time::Instant::now(),
+            })
+        })
     }
 
     /// Get a specific field from a register value

@@ -11,6 +11,7 @@ pub enum ApiKeyId {
     BankrApiKey,
     TwitterClientId,
     TwitterClientSecret,
+    DiscordBotToken,
 }
 
 impl ApiKeyId {
@@ -21,6 +22,7 @@ impl ApiKeyId {
             Self::BankrApiKey => "BANKR_API_KEY",
             Self::TwitterClientId => "TWITTER_CLIENT_ID",
             Self::TwitterClientSecret => "TWITTER_CLIENT_SECRET",
+            Self::DiscordBotToken => "DISCORD_BOT_TOKEN",
         }
     }
 
@@ -32,6 +34,7 @@ impl ApiKeyId {
             Self::BankrApiKey => Some(&["BANKR_API_KEY"]),
             Self::TwitterClientId => Some(&["TWITTER_CLIENT_ID"]),
             Self::TwitterClientSecret => Some(&["TWITTER_CLIENT_SECRET"]),
+            Self::DiscordBotToken => Some(&["DISCORD_BOT_TOKEN", "DISCORD_TOKEN"]),
         }
     }
 
@@ -47,6 +50,7 @@ impl ApiKeyId {
             Self::BankrApiKey,
             Self::TwitterClientId,
             Self::TwitterClientSecret,
+            Self::DiscordBotToken,
         ]
     }
 
@@ -57,6 +61,7 @@ impl ApiKeyId {
             "BANKR_API_KEY" => Some(Self::BankrApiKey),
             "TWITTER_CLIENT_ID" => Some(Self::TwitterClientId),
             "TWITTER_CLIENT_SECRET" => Some(Self::TwitterClientSecret),
+            "DISCORD_BOT_TOKEN" => Some(Self::DiscordBotToken),
             _ => None,
         }
     }
@@ -120,6 +125,17 @@ pub fn get_service_configs() -> Vec<ServiceConfig> {
             keys: vec![KeyConfig {
                 name: "BANKR_API_KEY",
                 label: "API Key",
+                secret: true,
+            }],
+        },
+        ServiceConfig {
+            group: "discord",
+            label: "Discord",
+            description: "Create a Bot application and copy its token",
+            url: "https://discord.com/developers/applications",
+            keys: vec![KeyConfig {
+                name: "DISCORD_BOT_TOKEN",
+                label: "Bot Token",
                 secret: true,
             }],
         },

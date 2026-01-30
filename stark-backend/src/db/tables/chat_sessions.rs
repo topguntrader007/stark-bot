@@ -181,6 +181,12 @@ impl Database {
             rusqlite::params![&now, id],
         )?;
 
+        // Delete agent context for the old session
+        conn.execute(
+            "DELETE FROM agent_contexts WHERE session_id = ?1",
+            rusqlite::params![id],
+        )?;
+
         // Create new session with same settings
         conn.execute(
             "INSERT INTO chat_sessions (session_key, agent_id, scope, channel_type, channel_id, platform_chat_id,

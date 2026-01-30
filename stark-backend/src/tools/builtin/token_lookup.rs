@@ -26,88 +26,34 @@ pub struct TokenInfo {
     pub name: String,
 }
 
-/// Load tokens from config directory
+/// Load tokens from config directory. Panics if config file is missing or invalid.
 pub fn load_tokens(config_dir: &Path) {
     let tokens_path = config_dir.join("tokens.ron");
-    if tokens_path.exists() {
-        match std::fs::read_to_string(&tokens_path) {
-            Ok(content) => {
-                match ron::from_str::<HashMap<String, HashMap<String, TokenInfo>>>(&content) {
-                    Ok(tokens) => {
-                        let total: usize = tokens.values().map(|t| t.len()).sum();
-                        log::info!(
-                            "[tokens] Loaded {} tokens across {} networks from {:?}",
-                            total,
-                            tokens.len(),
-                            tokens_path
-                        );
-                        let _ = TOKENS.set(tokens);
-                    }
-                    Err(e) => {
-                        log::error!("[tokens] Failed to parse tokens config: {}", e);
-                        let _ = TOKENS.set(default_tokens());
-                    }
-                }
-            }
-            Err(e) => {
-                log::error!("[tokens] Failed to read tokens file: {}", e);
-                let _ = TOKENS.set(default_tokens());
-            }
-        }
-    } else {
-        log::warn!("[tokens] Tokens file not found: {:?}, using defaults", tokens_path);
-        let _ = TOKENS.set(default_tokens());
+
+    if !tokens_path.exists() {
+        panic!("[tokens] Config file not found: {:?}", tokens_path);
     }
+
+    let content = std::fs::read_to_string(&tokens_path)
+        .unwrap_or_else(|e| panic!("[tokens] Failed to read {:?}: {}", tokens_path, e));
+
+    let tokens: HashMap<String, HashMap<String, TokenInfo>> = ron::from_str(&content)
+        .unwrap_or_else(|e| panic!("[tokens] Failed to parse {:?}: {}", tokens_path, e));
+
+    let total: usize = tokens.values().map(|t| t.len()).sum();
+    log::info!(
+        "[tokens] Loaded {} tokens across {} networks from {:?}",
+        total,
+        tokens.len(),
+        tokens_path
+    );
+
+    let _ = TOKENS.set(tokens);
 }
 
-/// Get tokens, loading defaults if not already loaded
+/// Get tokens. Panics if load_tokens() was not called.
 fn get_tokens() -> &'static HashMap<String, HashMap<String, TokenInfo>> {
-    TOKENS.get_or_init(default_tokens)
-}
-
-/// Default tokens (fallback if config not found)
-fn default_tokens() -> HashMap<String, HashMap<String, TokenInfo>> {
-    let mut networks = HashMap::new();
-
-    // Base network tokens
-    let mut base = HashMap::new();
-    base.insert("ETH".to_string(), TokenInfo {
-        address: "0xEeeeeEeeeEeEeeEeEeEeeEEEeeeeEeeeeeeeEEeE".to_string(),
-        decimals: 18,
-        name: "Ethereum".to_string(),
-    });
-    base.insert("WETH".to_string(), TokenInfo {
-        address: "0x4200000000000000000000000000000000000006".to_string(),
-        decimals: 18,
-        name: "Wrapped Ether".to_string(),
-    });
-    base.insert("USDC".to_string(), TokenInfo {
-        address: "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913".to_string(),
-        decimals: 6,
-        name: "USD Coin".to_string(),
-    });
-    networks.insert("base".to_string(), base);
-
-    // Mainnet tokens
-    let mut mainnet = HashMap::new();
-    mainnet.insert("ETH".to_string(), TokenInfo {
-        address: "0xEeeeeEeeeEeEeeEeEeEeeEEEeeeeEeeeeeeeEEeE".to_string(),
-        decimals: 18,
-        name: "Ethereum".to_string(),
-    });
-    mainnet.insert("WETH".to_string(), TokenInfo {
-        address: "0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2".to_string(),
-        decimals: 18,
-        name: "Wrapped Ether".to_string(),
-    });
-    mainnet.insert("USDC".to_string(), TokenInfo {
-        address: "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48".to_string(),
-        decimals: 6,
-        name: "USD Coin".to_string(),
-    });
-    networks.insert("mainnet".to_string(), mainnet);
-
-    networks
+    TOKENS.get().expect("[tokens] Token config not loaded - call load_tokens() first")
 }
 
 /// Token Lookup tool
@@ -145,7 +91,7 @@ impl TokenLookupTool {
             "cache_as".to_string(),
             PropertySchema {
                 schema_type: "string".to_string(),
-                description: "Register name to cache the token address (e.g., 'sell_token', 'buy_token')".to_string(),
+                description: "REQUIRED. Register name to cache the token address. Use 'sell_token' or 'buy_token' for swaps.".to_string(),
                 default: None,
                 items: None,
                 enum_values: None,
@@ -155,11 +101,11 @@ impl TokenLookupTool {
         TokenLookupTool {
             definition: ToolDefinition {
                 name: "token_lookup".to_string(),
-                description: "Look up a token's contract address by its symbol. Supports common tokens on Base and Mainnet. Use cache_as to store the address in a register for use with swap presets.".to_string(),
+                description: "Look up a token's contract address by symbol and cache it in a register. IMPORTANT: cache_as is required - use 'sell_token' or 'buy_token' for swaps.".to_string(),
                 input_schema: ToolInputSchema {
                     schema_type: "object".to_string(),
                     properties,
-                    required: vec!["symbol".to_string()],
+                    required: vec!["symbol".to_string(), "cache_as".to_string()],
                 },
                 group: ToolGroup::Web,
             },
@@ -203,7 +149,7 @@ struct TokenLookupParams {
     symbol: String,
     #[serde(default = "default_network")]
     network: String,
-    cache_as: Option<String>,
+    cache_as: String,
 }
 
 fn default_network() -> String {
@@ -224,32 +170,29 @@ impl Tool for TokenLookupTool {
 
         match Self::lookup(&params.symbol, &params.network) {
             Some(token) => {
-                // Cache in register if requested
-                if let Some(ref register_name) = params.cache_as {
-                    // Store address in the main register (e.g., "sell_token")
-                    context.set_register(register_name, json!(&token.address), "token_lookup");
+                // Store address in the main register (e.g., "sell_token")
+                context.set_register(&params.cache_as, json!(&token.address), "token_lookup");
 
-                    // Also store symbol in a separate register (e.g., "sell_token_symbol")
-                    let symbol_register = format!("{}_symbol", register_name);
-                    context.set_register(&symbol_register, json!(params.symbol.to_uppercase()), "token_lookup");
+                // Also store symbol in a separate register (e.g., "sell_token_symbol")
+                let symbol_register = format!("{}_symbol", params.cache_as);
+                context.set_register(&symbol_register, json!(params.symbol.to_uppercase()), "token_lookup");
 
-                    log::info!(
-                        "[token_lookup] Cached {} in registers: '{}'={}, '{}'={}",
-                        params.symbol,
-                        register_name,
-                        token.address,
-                        symbol_register,
-                        params.symbol.to_uppercase()
-                    );
-                }
+                log::info!(
+                    "[token_lookup] Cached {} in registers: '{}'={}, '{}'={}",
+                    params.symbol,
+                    params.cache_as,
+                    token.address,
+                    symbol_register,
+                    params.symbol.to_uppercase()
+                );
 
                 ToolResult::success(format!(
-                    "{} ({}) on {}\nAddress: {}\nDecimals: {}",
+                    "{} ({}) on {}\nAddress: {}\nCached in register: '{}'",
                     token.name,
                     params.symbol.to_uppercase(),
                     params.network,
                     token.address,
-                    token.decimals
+                    params.cache_as
                 )).with_metadata(json!({
                     "symbol": params.symbol.to_uppercase(),
                     "address": token.address,
@@ -275,9 +218,20 @@ impl Tool for TokenLookupTool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::Once;
+
+    static INIT: Once = Once::new();
+
+    fn setup() {
+        INIT.call_once(|| {
+            let config_dir = std::path::Path::new("../config");
+            load_tokens(config_dir);
+        });
+    }
 
     #[test]
     fn test_base_token_lookup() {
+        setup();
         let token = TokenLookupTool::lookup("USDC", "base").unwrap();
         assert_eq!(token.address, "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913");
         assert_eq!(token.decimals, 6);
@@ -285,6 +239,7 @@ mod tests {
 
     #[test]
     fn test_case_insensitive() {
+        setup();
         let token1 = TokenLookupTool::lookup("usdc", "base").unwrap();
         let token2 = TokenLookupTool::lookup("USDC", "base").unwrap();
         let token3 = TokenLookupTool::lookup("Usdc", "base").unwrap();
@@ -295,12 +250,14 @@ mod tests {
 
     #[test]
     fn test_eth_special_address() {
+        setup();
         let token = TokenLookupTool::lookup("ETH", "base").unwrap();
         assert_eq!(token.address, "0xEeeeeEeeeEeEeeEeEeEeeEEEeeeeEeeeeeeeEEeE");
     }
 
     #[test]
     fn test_unknown_token() {
+        setup();
         assert!(TokenLookupTool::lookup("UNKNOWN_TOKEN_XYZ", "base").is_none());
     }
 }

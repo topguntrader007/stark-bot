@@ -1,7 +1,7 @@
 ---
 name: swap
 description: "Swap ERC20 tokens on Base using 0x DEX aggregator via quoter.defirelay.com"
-version: 4.3.0
+version: 5.0.1
 author: starkbot
 homepage: https://0x.org
 metadata: {"requires_auth": false, "clawdbot":{"emoji":"🔄"}}
@@ -10,76 +10,145 @@ tags: [crypto, defi, swap, dex, base, trading, 0x]
 
 # Token Swap Integration (0x via DeFi Relay)
 
-## EXACT TOOL CALLS - Copy These Exactly!
+## IMPORTANT: ETH Must Be Wrapped First!
 
-To swap tokens, make these EXACT tool calls in order:
-
-### 1. local_burner_wallet
-```json
-{"action": "address", "cache_as": "wallet_address"}
-```
-
-### 2. token_lookup (sell token) - MUST include cache_as!
-```json
-{"symbol": "ETH", "network": "base", "cache_as": "sell_token"}
-```
-
-### 3. token_lookup (buy token) - MUST include cache_as!
-```json
-{"symbol": "USDC", "network": "base", "cache_as": "buy_token"}
-```
-
-### 4. register_set (amount in wei)
-```json
-{"key": "sell_amount", "value": "100000000000000"}
-```
-
-### 5. x402_fetch
-```json
-{"preset": "swap_quote", "network": "base", "cache_as": "swap_quote"}
-```
-
-### 6. x402_rpc
-```json
-{"preset": "gas_price", "network": "base"}
-```
-
-### 7. web3_tx
-```json
-{"from_register": "swap_quote", "max_fee_per_gas": "<GAS_PRICE_FROM_STEP_6>", "network": "base"}
-```
+When selling ETH, you MUST wrap it to WETH first. The swap always uses WETH, not native ETH.
 
 ---
 
-## CRITICAL RULES
+## Workflow A: Swapping ETH → Token
 
-### token_lookup MUST include cache_as in the SAME call!
+Use this when the user wants to swap ETH for another token.
 
-**WRONG - Two separate calls:**
+### 1. Lookup WETH as sell token
 ```json
-// Step 1 - lookup
-{"symbol": "ETH", "network": "base"}
-// Step 2 - try to store (WILL FAIL!)
-{"key": "sell_token", "value": "0xEeee..."}  // BLOCKED!
+{"symbol": "WETH", "cache_as": "sell_token"}
 ```
+**Tool:** `token_lookup`
 
-**CORRECT - One call with cache_as:**
+### 2. Check ETH and WETH balances
+Check WETH balance:
 ```json
-{"symbol": "ETH", "network": "base", "cache_as": "sell_token"}
+{"preset": "weth_balance", "network": "base", "call_only": true}
 ```
+**Tool:** `web3_function_call`
 
-### You CANNOT use register_set for:
-- `sell_token` - use `token_lookup` with `cache_as: "sell_token"`
-- `buy_token` - use `token_lookup` with `cache_as: "buy_token"`
-- `wallet_address` - use `local_burner_wallet` with `cache_as: "wallet_address"`
+Check ETH balance:
+```json
+{"preset": "get_balance", "network": "base"}
+```
+**Tool:** `x402_rpc`
 
-These registers are BLOCKED from register_set to prevent errors.
+**Important:** Report both balances to the user. If they have enough WETH already, skip steps 3-4 and go directly to step 5.
+
+### 3. Set wrap amount (only if WETH balance is insufficient)
+```json
+{"key": "wrap_amount", "value": "100000000000000"}
+```
+**Tool:** `register_set`
+
+### 4. Wrap ETH to WETH (only if WETH balance is insufficient)
+```json
+{"preset": "weth_deposit", "network": "base"}
+```
+**Tool:** `web3_function_call`
+
+### 5. Lookup buy token
+```json
+{"symbol": "USDC", "cache_as": "buy_token"}
+```
+**Tool:** `token_lookup`
+
+### 6. Set sell amount
+```json
+{"key": "sell_amount", "value": "100000000000000"}
+```
+**Tool:** `register_set`
+
+### 7. Get swap quote
+```json
+{"preset": "swap_quote", "network": "base", "cache_as": "swap_quote"}
+```
+**Tool:** `x402_fetch`
+
+### 8. Get gas price
+```json
+{"preset": "gas_price", "network": "base"}
+```
+**Tool:** `x402_rpc`
+
+### 9. Execute swap
+```json
+{"from_register": "swap_quote", "max_fee_per_gas": "<GAS_PRICE>", "network": "base"}
+```
+**Tool:** `web3_tx`
+
+---
+
+## Workflow B: Swapping Token → Token or Eth 
+
+Use this when selling any token OTHER than ETH (e.g., USDC → WETH).
+
+### 1. Lookup sell token and check balance
+Lookup the sell token:
+```json
+{"symbol": "USDC", "cache_as": "sell_token"}
+```
+**Tool:** `token_lookup`
+
+Check the sell token balance (use the token address from lookup as contract):
+```json
+{"abi": "erc20", "contract": "<sell_token_address>", "function": "balanceOf", "params": ["<wallet_address>"], "call_only": true, "network": "base"}
+```
+**Tool:** `web3_function_call`
+
+**Important:** Report the balance to the user. If insufficient, stop and inform them.
+
+### 2. Lookup buy token
+```json
+{"symbol": "WETH", "cache_as": "buy_token"}
+```
+**Tool:** `token_lookup`
+
+### 3. Set sell amount
+```json
+{"key": "sell_amount", "value": "1000000"}
+```
+**Tool:** `register_set`
+
+### 4. Get swap quote
+```json
+{"preset": "swap_quote", "network": "base", "cache_as": "swap_quote"}
+```
+**Tool:** `x402_fetch`
+
+### 5. Get gas price
+```json
+{"preset": "gas_price", "network": "base"}
+```
+**Tool:** `x402_rpc`
+
+### 6. Execute swap
+```json
+{"from_register": "swap_quote", "max_fee_per_gas": "<GAS_PRICE>", "network": "base"}
+```
+**Tool:** `web3_tx`
+
+---
+
+## Quick Reference: Which Workflow?
+
+| Selling | Workflow | Key Difference |
+|---------|----------|----------------|
+| ETH | Workflow A | Wrap ETH → WETH first, then swap WETH |
+| WETH | Workflow B | No wrapping needed |
+| USDC, other tokens | Workflow B | No wrapping needed |
 
 ---
 
 ## Amount Reference (Wei Values)
 
-For ETH (18 decimals):
+For ETH/WETH (18 decimals):
 - 0.0001 ETH = `100000000000000`
 - 0.001 ETH = `1000000000000000`
 - 0.01 ETH = `10000000000000000`
@@ -93,27 +162,22 @@ For USDC (6 decimals):
 
 ---
 
-## Supported Tokens
+## CRITICAL RULES
 
-ETH, WETH, USDC, USDbC, DAI, cbBTC, BNKR, AERO, DEGEN, BRETT, TOSHI
+### You CANNOT use register_set for these registers:
+- `sell_token` - use `token_lookup` with `cache_as: "sell_token"`
+- `buy_token` - use `token_lookup` with `cache_as: "buy_token"`
+
+### Always wrap ETH before swapping!
+If user says "swap ETH for X", you MUST:
+1. Wrap ETH to WETH first (using `weth_deposit` preset)
+2. Then swap WETH for X
 
 ---
 
-## What Gets Stored in Registers
+## Supported Tokens
 
-After running the steps above:
-
-| Register | Source | Example Value |
-|----------|--------|---------------|
-| `wallet_address` | local_burner_wallet | `0x57bf3c9d...` |
-| `sell_token` | token_lookup | `0xEeee...` |
-| `sell_token_symbol` | token_lookup | `ETH` |
-| `buy_token` | token_lookup | `0x8335...` |
-| `buy_token_symbol` | token_lookup | `USDC` |
-| `sell_amount` | register_set | `100000000000000` |
-| `network_name` | x402_fetch | `Base` |
-| `chain_id` | x402_fetch | `8453` |
-| `swap_quote` | x402_fetch | `{to, data, value, gas, ...}` |
+Use the `token_lookup` tool to check if a token is supported. The tool will return available tokens if the requested one isn't found.
 
 ---
 
@@ -121,7 +185,9 @@ After running the steps above:
 
 | Error | Fix |
 |-------|-----|
-| "Cannot set 'sell_token' via register_set" | Use `token_lookup` with `cache_as: "sell_token"` instead! |
-| "Cannot set 'buy_token' via register_set" | Use `token_lookup` with `cache_as: "buy_token"` instead! |
+| "Cannot set 'sell_token' via register_set" | Use `token_lookup` with `cache_as: "sell_token"` |
+| "Cannot set 'buy_token' via register_set" | Use `token_lookup` with `cache_as: "buy_token"` |
 | "Preset requires register 'X'" | Run the tool that sets register X first |
 | "Insufficient balance" | Check balance before swapping |
+| Swap fails with ETH | Make sure you wrapped ETH to WETH first! |
+| **402 Payment Required / Settlement error** | **Wait 30 seconds and retry the same `x402_fetch` call. This is a temporary payment relay issue that usually resolves on retry. Retry up to 3 times before giving up.** |

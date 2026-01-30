@@ -63,6 +63,12 @@ COPY --from=backend-builder /app/target/release/stark-backend /app/
 # Copy the built frontend (dist folder)
 COPY --from=frontend-builder /app/stark-frontend/dist /app/stark-frontend/dist
 
+# Copy config directory (tokens.ron, presets, networks)
+COPY config /app/config
+
+# Copy ABIs for web3 function calls
+COPY abis /app/abis
+
 # Copy the skills directory (bundled skills loaded on boot)
 COPY skills /app/skills
 

@@ -1,56 +1,10 @@
-//! Multi-agent specific tools for mode transitions and task management
+//! Multi-agent specific tools for mode transitions and work queue management
 //!
 //! These tools are designed for OpenAI-compatible APIs (Kimi, etc.)
 
-use crate::tools::{
-    PropertySchema, ToolContext, ToolDefinition, ToolGroup, ToolInputSchema, ToolResult,
-};
-use serde_json::{json, Value};
+use crate::tools::{PropertySchema, ToolDefinition, ToolGroup, ToolInputSchema};
+use serde_json::json;
 use std::collections::HashMap;
-
-// =============================================================================
-// INITIALIZER MODE TOOLS
-// =============================================================================
-
-/// Create the `select_mode` tool for the Initializer agent
-pub fn select_mode_tool() -> ToolDefinition {
-    let mut properties = HashMap::new();
-    properties.insert(
-        "mode".to_string(),
-        PropertySchema {
-            schema_type: "string".to_string(),
-            description: "The mode to transition to".to_string(),
-            default: None,
-            items: None,
-            enum_values: Some(vec![
-                "explore".to_string(),
-                "plan".to_string(),
-                "perform".to_string(),
-            ]),
-        },
-    );
-    properties.insert(
-        "reasoning".to_string(),
-        PropertySchema {
-            schema_type: "string".to_string(),
-            description: "Why this mode is appropriate for the request".to_string(),
-            default: None,
-            items: None,
-            enum_values: None,
-        },
-    );
-
-    ToolDefinition {
-        name: "select_mode".to_string(),
-        description: "Select the agent mode. Use 'explore' to gather information first, 'plan' to create a multi-step plan, or 'perform' for simple direct actions.".to_string(),
-        input_schema: ToolInputSchema {
-            schema_type: "object".to_string(),
-            properties,
-            required: vec!["mode".to_string(), "reasoning".to_string()],
-        },
-        group: ToolGroup::System,
-    }
-}
 
 // =============================================================================
 // EXPLORE MODE TOOLS
@@ -156,90 +110,8 @@ pub fn ready_to_plan_tool() -> ToolDefinition {
 }
 
 // =============================================================================
-// PLAN MODE TOOLS - Multi-task support
+// PLAN MODE TOOLS
 // =============================================================================
-
-/// Create the `create_task` tool for adding tasks to the plan
-pub fn create_task_tool() -> ToolDefinition {
-    let mut properties = HashMap::new();
-    properties.insert(
-        "id".to_string(),
-        PropertySchema {
-            schema_type: "string".to_string(),
-            description: "Unique task ID (e.g., 'task-1', 'setup-db')".to_string(),
-            default: None,
-            items: None,
-            enum_values: None,
-        },
-    );
-    properties.insert(
-        "subject".to_string(),
-        PropertySchema {
-            schema_type: "string".to_string(),
-            description: "Short task title (imperative form, e.g., 'Create user model')".to_string(),
-            default: None,
-            items: None,
-            enum_values: None,
-        },
-    );
-    properties.insert(
-        "description".to_string(),
-        PropertySchema {
-            schema_type: "string".to_string(),
-            description: "Detailed description of what needs to be done".to_string(),
-            default: None,
-            items: None,
-            enum_values: None,
-        },
-    );
-    properties.insert(
-        "blocked_by".to_string(),
-        PropertySchema {
-            schema_type: "array".to_string(),
-            description: "IDs of tasks that must complete before this one can start".to_string(),
-            default: Some(json!([])),
-            items: Some(Box::new(PropertySchema {
-                schema_type: "string".to_string(),
-                description: "Task ID".to_string(),
-                default: None,
-                items: None,
-                enum_values: None,
-            })),
-            enum_values: None,
-        },
-    );
-    properties.insert(
-        "tool".to_string(),
-        PropertySchema {
-            schema_type: "string".to_string(),
-            description: "Primary tool to use for this task (optional)".to_string(),
-            default: None,
-            items: None,
-            enum_values: None,
-        },
-    );
-    properties.insert(
-        "priority".to_string(),
-        PropertySchema {
-            schema_type: "integer".to_string(),
-            description: "Priority (1=highest, 100=default). Lower numbers execute first among ready tasks.".to_string(),
-            default: Some(json!(100)),
-            items: None,
-            enum_values: None,
-        },
-    );
-
-    ToolDefinition {
-        name: "create_task".to_string(),
-        description: "Add a task to the execution plan. Tasks can have dependencies and run in parallel when possible.".to_string(),
-        input_schema: ToolInputSchema {
-            schema_type: "object".to_string(),
-            properties,
-            required: vec!["id".to_string(), "subject".to_string(), "description".to_string()],
-        },
-        group: ToolGroup::System,
-    }
-}
 
 /// Create the `set_plan_summary` tool
 pub fn set_plan_summary_tool() -> ToolDefinition {
@@ -283,7 +155,7 @@ pub fn ready_to_perform_tool() -> ToolDefinition {
 
     ToolDefinition {
         name: "ready_to_perform".to_string(),
-        description: "Signal that planning is complete and execution can begin. Must have at least one task created.".to_string(),
+        description: "Signal that planning is complete and execution can begin. Must have work items queued.".to_string(),
         input_schema: ToolInputSchema {
             schema_type: "object".to_string(),
             properties,
@@ -296,104 +168,6 @@ pub fn ready_to_perform_tool() -> ToolDefinition {
 // =============================================================================
 // PERFORM MODE TOOLS
 // =============================================================================
-
-/// Create the `start_task` tool
-pub fn start_task_tool() -> ToolDefinition {
-    let mut properties = HashMap::new();
-    properties.insert(
-        "task_id".to_string(),
-        PropertySchema {
-            schema_type: "string".to_string(),
-            description: "ID of the task to start working on".to_string(),
-            default: None,
-            items: None,
-            enum_values: None,
-        },
-    );
-
-    ToolDefinition {
-        name: "start_task".to_string(),
-        description: "Mark a task as in-progress. Call this before working on a task.".to_string(),
-        input_schema: ToolInputSchema {
-            schema_type: "object".to_string(),
-            properties,
-            required: vec!["task_id".to_string()],
-        },
-        group: ToolGroup::System,
-    }
-}
-
-/// Create the `complete_task` tool
-pub fn complete_task_tool() -> ToolDefinition {
-    let mut properties = HashMap::new();
-    properties.insert(
-        "task_id".to_string(),
-        PropertySchema {
-            schema_type: "string".to_string(),
-            description: "ID of the completed task".to_string(),
-            default: None,
-            items: None,
-            enum_values: None,
-        },
-    );
-    properties.insert(
-        "result".to_string(),
-        PropertySchema {
-            schema_type: "string".to_string(),
-            description: "What was accomplished".to_string(),
-            default: None,
-            items: None,
-            enum_values: None,
-        },
-    );
-
-    ToolDefinition {
-        name: "complete_task".to_string(),
-        description: "Mark a task as completed successfully.".to_string(),
-        input_schema: ToolInputSchema {
-            schema_type: "object".to_string(),
-            properties,
-            required: vec!["task_id".to_string(), "result".to_string()],
-        },
-        group: ToolGroup::System,
-    }
-}
-
-/// Create the `fail_task` tool
-pub fn fail_task_tool() -> ToolDefinition {
-    let mut properties = HashMap::new();
-    properties.insert(
-        "task_id".to_string(),
-        PropertySchema {
-            schema_type: "string".to_string(),
-            description: "ID of the failed task".to_string(),
-            default: None,
-            items: None,
-            enum_values: None,
-        },
-    );
-    properties.insert(
-        "error".to_string(),
-        PropertySchema {
-            schema_type: "string".to_string(),
-            description: "What went wrong".to_string(),
-            default: None,
-            items: None,
-            enum_values: None,
-        },
-    );
-
-    ToolDefinition {
-        name: "fail_task".to_string(),
-        description: "Mark a task as failed. Include error details.".to_string(),
-        input_schema: ToolInputSchema {
-            schema_type: "object".to_string(),
-            properties,
-            required: vec!["task_id".to_string(), "error".to_string()],
-        },
-        group: ToolGroup::System,
-    }
-}
 
 /// Create the `finish_execution` tool
 pub fn finish_execution_tool() -> ToolDefinition {
@@ -421,7 +195,7 @@ pub fn finish_execution_tool() -> ToolDefinition {
 
     ToolDefinition {
         name: "finish_execution".to_string(),
-        description: "Signal that all tasks are complete and provide a final summary.".to_string(),
+        description: "Signal that all work is complete and provide a final summary.".to_string(),
         input_schema: ToolInputSchema {
             schema_type: "object".to_string(),
             properties,
@@ -461,11 +235,173 @@ pub fn add_note_tool() -> ToolDefinition {
     }
 }
 
-/// Create the `get_task_list` tool
-pub fn get_task_list_tool() -> ToolDefinition {
+// =============================================================================
+// TASK TOOLS (Persistent Memory)
+// =============================================================================
+
+/// Create the `create_task` tool for adding tasks (Plan mode only)
+pub fn create_task_tool() -> ToolDefinition {
+    let mut properties = HashMap::new();
+    properties.insert(
+        "subject".to_string(),
+        PropertySchema {
+            schema_type: "string".to_string(),
+            description: "Short description of the task to be done".to_string(),
+            default: None,
+            items: None,
+            enum_values: None,
+        },
+    );
+    properties.insert(
+        "note".to_string(),
+        PropertySchema {
+            schema_type: "string".to_string(),
+            description: "Optional initial note for this task".to_string(),
+            default: None,
+            items: None,
+            enum_values: None,
+        },
+    );
+
     ToolDefinition {
-        name: "get_task_list".to_string(),
-        description: "Get the current task list with status. Shows which tasks are ready, blocked, in-progress, or complete.".to_string(),
+        name: "create_task".to_string(),
+        description: "Add a task to the persistent task list. Use this in Plan mode to build up the list of tasks to execute.".to_string(),
+        input_schema: ToolInputSchema {
+            schema_type: "object".to_string(),
+            properties,
+            required: vec!["subject".to_string()],
+        },
+        group: ToolGroup::System,
+    }
+}
+
+/// Create the `add_task_note` tool for adding notes to tasks (any mode)
+pub fn add_task_note_tool() -> ToolDefinition {
+    let mut properties = HashMap::new();
+    properties.insert(
+        "id".to_string(),
+        PropertySchema {
+            schema_type: "string".to_string(),
+            description: "Task ID (can use first 8 chars)".to_string(),
+            default: None,
+            items: None,
+            enum_values: None,
+        },
+    );
+    properties.insert(
+        "note".to_string(),
+        PropertySchema {
+            schema_type: "string".to_string(),
+            description: "Note content about progress, observations, or issues".to_string(),
+            default: None,
+            items: None,
+            enum_values: None,
+        },
+    );
+
+    ToolDefinition {
+        name: "add_task_note".to_string(),
+        description: "Add a note to a task. Use to record observations, progress updates, or issues encountered.".to_string(),
+        input_schema: ToolInputSchema {
+            schema_type: "object".to_string(),
+            properties,
+            required: vec!["id".to_string(), "note".to_string()],
+        },
+        group: ToolGroup::System,
+    }
+}
+
+/// Create the `start_task` tool for getting next task (Perform mode only)
+pub fn start_task_tool() -> ToolDefinition {
+    ToolDefinition {
+        name: "start_task".to_string(),
+        description: "Start the next pending task (FIFO order). Marks it IN_PROGRESS and returns its details. Use this in Perform mode to begin executing tasks.".to_string(),
+        input_schema: ToolInputSchema {
+            schema_type: "object".to_string(),
+            properties: HashMap::new(),
+            required: vec![],
+        },
+        group: ToolGroup::System,
+    }
+}
+
+/// Create the `complete_task` tool for marking task done (Perform mode only)
+pub fn complete_task_tool() -> ToolDefinition {
+    let mut properties = HashMap::new();
+    properties.insert(
+        "id".to_string(),
+        PropertySchema {
+            schema_type: "string".to_string(),
+            description: "Task ID (can use first 8 chars)".to_string(),
+            default: None,
+            items: None,
+            enum_values: None,
+        },
+    );
+    properties.insert(
+        "result".to_string(),
+        PropertySchema {
+            schema_type: "string".to_string(),
+            description: "Summary of what was accomplished".to_string(),
+            default: None,
+            items: None,
+            enum_values: None,
+        },
+    );
+
+    ToolDefinition {
+        name: "complete_task".to_string(),
+        description: "Mark a task as completed with a result summary.".to_string(),
+        input_schema: ToolInputSchema {
+            schema_type: "object".to_string(),
+            properties,
+            required: vec!["id".to_string(), "result".to_string()],
+        },
+        group: ToolGroup::System,
+    }
+}
+
+/// Create the `fail_task` tool for marking task failed (Perform mode only)
+pub fn fail_task_tool() -> ToolDefinition {
+    let mut properties = HashMap::new();
+    properties.insert(
+        "id".to_string(),
+        PropertySchema {
+            schema_type: "string".to_string(),
+            description: "Task ID (can use first 8 chars)".to_string(),
+            default: None,
+            items: None,
+            enum_values: None,
+        },
+    );
+    properties.insert(
+        "error".to_string(),
+        PropertySchema {
+            schema_type: "string".to_string(),
+            description: "Description of what went wrong".to_string(),
+            default: None,
+            items: None,
+            enum_values: None,
+        },
+    );
+
+    ToolDefinition {
+        name: "fail_task".to_string(),
+        description: "Mark a task as failed with an error description.".to_string(),
+        input_schema: ToolInputSchema {
+            schema_type: "object".to_string(),
+            properties,
+            required: vec!["id".to_string(), "error".to_string()],
+        },
+        group: ToolGroup::System,
+    }
+}
+
+/// Create the `get_tasks` tool for viewing the task list (any mode)
+pub fn get_tasks_tool() -> ToolDefinition {
+    ToolDefinition {
+        name: "get_tasks".to_string(),
+        description: "Get the full task list with all tasks, their status, and notes.".to_string(),
         input_schema: ToolInputSchema {
             schema_type: "object".to_string(),
             properties: HashMap::new(),
@@ -484,28 +420,32 @@ pub fn get_tools_for_mode(mode: super::types::AgentMode) -> Vec<ToolDefinition> 
     use super::types::AgentMode;
 
     match mode {
-        AgentMode::Initializer => vec![
-            select_mode_tool(),
-        ],
         AgentMode::Explore => vec![
             add_finding_tool(),
             add_note_tool(),
             ready_to_plan_tool(),
+            // Task tools (read-only in explore)
+            add_task_note_tool(),
+            get_tasks_tool(),
         ],
         AgentMode::Plan => vec![
-            create_task_tool(),
             set_plan_summary_tool(),
             add_note_tool(),
-            get_task_list_tool(),
             ready_to_perform_tool(),
+            // Task tools (can create tasks)
+            create_task_tool(),
+            add_task_note_tool(),
+            get_tasks_tool(),
         ],
         AgentMode::Perform => vec![
+            add_note_tool(),
+            finish_execution_tool(),
+            // Task tools (can start/complete/fail tasks)
             start_task_tool(),
             complete_task_tool(),
             fail_task_tool(),
-            add_note_tool(),
-            get_task_list_tool(),
-            finish_execution_tool(),
+            add_task_note_tool(),
+            get_tasks_tool(),
         ],
     }
 }
@@ -513,22 +453,22 @@ pub fn get_tools_for_mode(mode: super::types::AgentMode) -> Vec<ToolDefinition> 
 /// Get all multi-agent tools (for reference)
 pub fn get_all_tools() -> Vec<ToolDefinition> {
     vec![
-        // Initializer
-        select_mode_tool(),
         // Explore
         add_finding_tool(),
         ready_to_plan_tool(),
         // Plan
-        create_task_tool(),
         set_plan_summary_tool(),
         ready_to_perform_tool(),
         // Perform
-        start_task_tool(),
-        complete_task_tool(),
-        fail_task_tool(),
         finish_execution_tool(),
         // Shared
         add_note_tool(),
-        get_task_list_tool(),
+        // Task tools
+        create_task_tool(),
+        add_task_note_tool(),
+        start_task_tool(),
+        complete_task_tool(),
+        fail_task_tool(),
+        get_tasks_tool(),
     ]
 }

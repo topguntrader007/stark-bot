@@ -100,7 +100,7 @@ impl RegisterSetTool {
     const BLOCKED_REGISTERS: &'static [(&'static str, &'static str)] = &[
         ("sell_token", "Use 'token_lookup' tool with cache_as: 'sell_token'"),
         ("buy_token", "Use 'token_lookup' tool with cache_as: 'buy_token'"),
-        ("wallet_address", "Use 'local_burner_wallet' tool with cache_as: 'wallet_address'"),
+        ("wallet_address", "This is an intrinsic register - automatically available from wallet config"),
         ("network", "Use 'network_name' instead - 'network' is reserved"),
     ];
 

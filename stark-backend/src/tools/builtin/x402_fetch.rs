@@ -2,6 +2,7 @@
 //!
 //! Uses presets to build URLs from register values, preventing hallucination.
 
+use crate::tools::http_retry::HttpRetryManager;
 use crate::tools::presets::{get_chain_id, get_fetch_preset, get_network_name, list_fetch_presets};
 use crate::tools::registry::Tool;
 use crate::tools::types::{
@@ -267,18 +268,48 @@ impl Tool for X402FetchTool {
             Err(e) => return ToolResult::error(e),
         };
 
+        // Extract host for retry tracking
+        let retry_key = format!("x402:{}", params.preset);
+        let retry_manager = HttpRetryManager::global();
+
         // Make the request
         let response = match client.get_with_payment(&url).await {
             Ok(r) => r,
-            Err(e) => return ToolResult::error(format!("Request failed: {}", e)),
+            Err(e) => {
+                let error_msg = format!("Request failed: {}", e);
+                if HttpRetryManager::is_retryable_error(&error_msg) {
+                    let delay = retry_manager.record_error(&retry_key);
+                    return ToolResult::retryable_error(error_msg, delay);
+                }
+                return ToolResult::error(error_msg);
+            }
         };
 
         // Check HTTP status
         let status = response.response.status();
         if !status.is_success() {
             let body = response.response.text().await.unwrap_or_default();
+
+            // Add retry hint for 402 settlement errors (use exponential backoff)
+            if status.as_u16() == 402 && (body.contains("Settlement") || body.contains("Facilitator")) {
+                let delay = retry_manager.record_error(&retry_key);
+                return ToolResult::retryable_error(
+                    format!("HTTP error {} Payment Required: {}\n\n⚠️ This is a temporary settlement/payment relay error.", status, body),
+                    delay
+                );
+            }
+
+            // Check for other retryable errors
+            if HttpRetryManager::is_retryable_status(status.as_u16()) {
+                let delay = retry_manager.record_error(&retry_key);
+                return ToolResult::retryable_error(format!("HTTP error {}: {}", status, body), delay);
+            }
+
             return ToolResult::error(format!("HTTP error {}: {}", status, body));
         }
+
+        // Success - reset backoff
+        retry_manager.record_success(&retry_key);
 
         // Parse response body
         let body = match response.response.text().await {

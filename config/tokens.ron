@@ -58,7 +58,7 @@
             decimals: 18,
             name: "Toshi",
         ),
-         "STARKBOT": (
+        "STARKBOT": (
             address: "0x587Cd533F418825521f3A1daa7CCd1E7339A1B07",
             decimals: 18,
             name: "StarkBot",

@@ -2,6 +2,7 @@
 //!
 //! Uses presets to build RPC params from register values, preventing hallucination.
 
+use crate::tools::http_retry::HttpRetryManager;
 use crate::tools::presets::{get_rpc_preset, list_rpc_presets};
 use crate::tools::registry::Tool;
 use crate::tools::types::{
@@ -200,18 +201,37 @@ impl Tool for X402RpcTool {
             Err(e) => return ToolResult::error(e),
         };
 
+        // Setup retry tracking
+        let retry_key = format!("x402_rpc:{}:{}", params.network, params.preset);
+        let retry_manager = HttpRetryManager::global();
+
         // Make the request
         let response = match client.post_with_payment(&url, &rpc_request).await {
             Ok(r) => r,
-            Err(e) => return ToolResult::error(format!("RPC request failed: {}", e)),
+            Err(e) => {
+                let error_msg = format!("RPC request failed: {}", e);
+                if HttpRetryManager::is_retryable_error(&error_msg) {
+                    let delay = retry_manager.record_error(&retry_key);
+                    return ToolResult::retryable_error(error_msg, delay);
+                }
+                return ToolResult::error(error_msg);
+            }
         };
 
         // Check HTTP status
         let status = response.response.status();
         if !status.is_success() {
             let body = response.response.text().await.unwrap_or_default();
-            return ToolResult::error(format!("HTTP error {}: {}", status, body));
+            let error_msg = format!("HTTP error {}: {}", status, body);
+            if HttpRetryManager::is_retryable_status(status.as_u16()) {
+                let delay = retry_manager.record_error(&retry_key);
+                return ToolResult::retryable_error(error_msg, delay);
+            }
+            return ToolResult::error(error_msg);
         }
+
+        // Success - reset backoff
+        retry_manager.record_success(&retry_key);
 
         // Parse response
         let body = match response.response.text().await {

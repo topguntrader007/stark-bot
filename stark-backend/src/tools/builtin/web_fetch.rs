@@ -1,3 +1,4 @@
+use crate::tools::http_retry::{is_reqwest_error_retryable, HttpRetryManager};
 use crate::tools::registry::Tool;
 use crate::tools::types::{
     PropertySchema, ToolContext, ToolDefinition, ToolGroup, ToolInputSchema, ToolResult,
@@ -204,17 +205,36 @@ impl Tool for WebFetchTool {
             .build()
             .unwrap_or_else(|_| reqwest::Client::new());
 
+        // Extract host for retry tracking
+        let retry_key = url.host_str().unwrap_or("unknown").to_string();
+        let retry_manager = HttpRetryManager::global();
+
         let response = match client.get(&params.url).send().await {
             Ok(r) => r,
-            Err(e) => return ToolResult::error(format!("Failed to fetch URL: {}", e)),
+            Err(e) => {
+                let error_msg = format!("Failed to fetch URL: {}", e);
+                if is_reqwest_error_retryable(&e) {
+                    let delay = retry_manager.record_error(&retry_key);
+                    return ToolResult::retryable_error(error_msg, delay);
+                }
+                return ToolResult::error(error_msg);
+            }
         };
 
         let final_url = response.url().to_string();
         let status = response.status();
 
         if !status.is_success() {
-            return ToolResult::error(format!("HTTP error: {} for URL: {}", status, params.url));
+            let error_msg = format!("HTTP error: {} for URL: {}", status, params.url);
+            if HttpRetryManager::is_retryable_status(status.as_u16()) {
+                let delay = retry_manager.record_error(&retry_key);
+                return ToolResult::retryable_error(error_msg, delay);
+            }
+            return ToolResult::error(error_msg);
         }
+
+        // Success - reset backoff for this host
+        retry_manager.record_success(&retry_key);
 
         let content_type = response
             .headers()

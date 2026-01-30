@@ -34,4 +34,4 @@ EXPOSE 8081
 # Run with cargo-watch for hot reloading
 # -w watches specified directories for changes
 # -x runs the specified cargo command
-CMD ["cargo", "watch", "-w", "stark-backend/src", "-w", "Cargo.toml", "-x", "run -p stark-backend"]
+CMD ["cargo", "watch", "-w", "stark-backend/src", "-w", "Cargo.toml", "-w", "config", "-w", "abis", "-w", "skills", "-x", "run -p stark-backend"]

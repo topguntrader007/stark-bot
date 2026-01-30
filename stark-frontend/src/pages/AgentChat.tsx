@@ -31,6 +31,7 @@ export default function AgentChat() {
   const [copied, setCopied] = useState(false);
   const [trackedTxs, setTrackedTxs] = useState<TrackedTransaction[]>([]);
   const [pendingConfirmation, setPendingConfirmation] = useState<PendingConfirmation | null>(null);
+  const [agentMode, setAgentMode] = useState<{ mode: string; label: string } | null>(null);
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
@@ -171,6 +172,20 @@ export default function AgentChat() {
     return () => {
       off('tx.pending', handleTxPending);
       off('tx.confirmed', handleTxConfirmed);
+    };
+  }, [on, off]);
+
+  // Listen for agent mode changes
+  useEffect(() => {
+    const handleModeChange = (data: unknown) => {
+      const event = data as { mode: string; label: string; reason?: string };
+      console.log('[Agent] Mode changed:', event.mode, event.label, event.reason);
+      setAgentMode({ mode: event.mode, label: event.label });
+    };
+
+    on('agent.mode_change', handleModeChange);
+    return () => {
+      off('agent.mode_change', handleModeChange);
     };
   }, [on, off]);
 
@@ -487,6 +502,23 @@ export default function AgentChat() {
               {connected ? 'Connected' : 'Disconnected'}
             </span>
           </div>
+          {/* Agent Mode Badge */}
+          {agentMode && (
+            <div className={`flex items-center gap-2 px-3 py-1 rounded-full text-sm font-medium ${
+              agentMode.mode === 'explore' ? 'bg-blue-500/20 text-blue-400 border border-blue-500/50' :
+              agentMode.mode === 'plan' ? 'bg-orange-500/20 text-orange-400 border border-orange-500/50' :
+              agentMode.mode === 'perform' ? 'bg-green-500/20 text-green-400 border border-green-500/50' :
+              'bg-slate-500/20 text-slate-400 border border-slate-500/50'
+            }`}>
+              <span className={`w-2 h-2 rounded-full ${
+                agentMode.mode === 'explore' ? 'bg-blue-400' :
+                agentMode.mode === 'plan' ? 'bg-orange-400' :
+                agentMode.mode === 'perform' ? 'bg-green-400' :
+                'bg-slate-400'
+              } ${isLoading ? 'animate-pulse' : ''}`} />
+              <span>{agentMode.label}</span>
+            </div>
+          )}
         </div>
 
         {/* Debug Toggle + Wallet Info */}

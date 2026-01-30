@@ -1,4 +1,5 @@
 pub mod builtin;
+pub mod http_retry;
 pub mod presets;
 pub mod register;
 pub mod registry;

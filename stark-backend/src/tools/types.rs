@@ -157,6 +157,10 @@ pub struct ToolResult {
     pub error: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub metadata: Option<Value>,
+    /// If set, indicates the agent should retry after this many seconds.
+    /// Used for transient network errors with exponential backoff.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub retry_after_secs: Option<u64>,
 }
 
 impl ToolResult {
@@ -166,6 +170,7 @@ impl ToolResult {
             content: content.into(),
             error: None,
             metadata: None,
+            retry_after_secs: None,
         }
     }
 
@@ -176,12 +181,39 @@ impl ToolResult {
             content: msg.clone(),
             error: Some(msg),
             metadata: None,
+            retry_after_secs: None,
+        }
+    }
+
+    /// Create a retryable error result with exponential backoff hint.
+    /// The agent will be instructed to wait and retry after the specified seconds.
+    pub fn retryable_error(message: impl Into<String>, retry_after_secs: u64) -> Self {
+        let msg = message.into();
+        ToolResult {
+            success: false,
+            content: format!(
+                "{}\n\n⏳ This appears to be a temporary network error. Waiting {} seconds before retrying...",
+                msg, retry_after_secs
+            ),
+            error: Some(msg),
+            metadata: None,
+            retry_after_secs: Some(retry_after_secs),
         }
     }
 
     pub fn with_metadata(mut self, metadata: Value) -> Self {
         self.metadata = Some(metadata);
         self
+    }
+
+    pub fn with_retry_after(mut self, secs: u64) -> Self {
+        self.retry_after_secs = Some(secs);
+        self
+    }
+
+    /// Check if this result indicates the tool should be retried
+    pub fn should_retry(&self) -> bool {
+        self.retry_after_secs.is_some()
     }
 }
 

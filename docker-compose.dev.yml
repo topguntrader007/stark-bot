@@ -13,6 +13,10 @@ services:
       - ./stark-frontend:/app/stark-frontend
       - ./Cargo.toml:/app/Cargo.toml
       - ./Cargo.lock:/app/Cargo.lock
+      # Mount config directory (tokens.ron, presets, etc.)
+      - ./config:/app/config
+      # Mount ABIs for web3 function calls
+      - ./abis:/app/abis
       # Mount skills directory for bundled skills
       - ./skills:/app/skills
       # Mount SOUL.md for bot personality

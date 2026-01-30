@@ -2,19 +2,19 @@
 //!
 //! This module implements a multi-phase agent architecture with multi-task support:
 //!
-//! 1. **Initializer** - Analyzes the request and selects the appropriate mode
-//! 2. **Explore** - Gathers information and builds context
-//! 3. **Plan** - Creates a multi-task execution plan with dependencies
-//! 4. **Perform** - Executes tasks (supports parallel execution)
+//! 1. **Explore** - Gathers information and builds context (default starting mode)
+//! 2. **Plan** - Creates a multi-task execution plan with dependencies
+//! 3. **Perform** - Executes tasks using action tools (supports parallel execution)
+//!
+//! ## Mode Capabilities
+//!
+//! - **Explore/Plan**: Skills are available for research and information gathering
+//! - **Perform**: Action tools (swap, transfer, etc.) are available for execution
 //!
 //! ## Flow
 //!
 //! ```text
-//! Request → Initializer → [Explore] → Plan → Perform → Response
-//!                ↓
-//!           (simple task)
-//!                ↓
-//!             Perform → Response
+//! Request → Explore → Plan → Perform → Response
 //! ```
 //!
 //! ## Multi-Task Features
@@ -45,4 +45,4 @@ pub mod tools;
 pub mod types;
 
 pub use orchestrator::{Orchestrator, ProcessResult};
-pub use types::{AgentContext, AgentMode, Finding, Relevance, Task, TaskStats, TaskStatus};
+pub use types::{AgentContext, AgentMode};

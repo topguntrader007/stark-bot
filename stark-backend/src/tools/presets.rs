@@ -11,6 +11,7 @@ use std::sync::OnceLock;
 /// Global preset storage (loaded once at startup)
 static FETCH_PRESETS: OnceLock<HashMap<String, FetchPreset>> = OnceLock::new();
 static RPC_PRESETS: OnceLock<HashMap<String, RpcPreset>> = OnceLock::new();
+static WEB3_PRESETS: OnceLock<HashMap<String, Web3Preset>> = OnceLock::new();
 static NETWORKS: OnceLock<HashMap<String, NetworkConfig>> = OnceLock::new();
 
 /// x402_fetch preset configuration
@@ -35,6 +36,26 @@ pub struct RpcPreset {
     /// Whether to append "latest" as final param
     #[serde(default)]
     pub append_latest: bool,
+    pub description: String,
+}
+
+/// web3_function_call preset configuration
+#[derive(Debug, Clone, Deserialize)]
+pub struct Web3Preset {
+    /// ABI file name (without .json)
+    pub abi: String,
+    /// Contract address per network
+    pub contracts: HashMap<String, String>,
+    /// Function name to call
+    pub function: String,
+    /// Register keys to read for function params (in order)
+    #[serde(default)]
+    pub params_registers: Vec<String>,
+    /// Register key for ETH value (for payable functions)
+    pub value_register: Option<String>,
+    /// Static params (not from registers)
+    #[serde(default)]
+    pub static_params: Vec<String>,
     pub description: String,
 }
 
@@ -87,6 +108,26 @@ pub fn load_presets(config_dir: &Path) {
     } else {
         log::warn!("[presets] RPC presets file not found: {:?}", rpc_path);
         let _ = RPC_PRESETS.set(default_rpc_presets());
+    }
+
+    // Load Web3 presets
+    let web3_path = config_dir.join("web3_presets.ron");
+    if web3_path.exists() {
+        match std::fs::read_to_string(&web3_path) {
+            Ok(content) => {
+                match ron::from_str::<HashMap<String, Web3Preset>>(&content) {
+                    Ok(presets) => {
+                        log::info!("[presets] Loaded {} Web3 presets from {:?}", presets.len(), web3_path);
+                        let _ = WEB3_PRESETS.set(presets);
+                    }
+                    Err(e) => log::error!("[presets] Failed to parse Web3 presets: {}", e),
+                }
+            }
+            Err(e) => log::error!("[presets] Failed to read Web3 presets file: {}", e),
+        }
+    } else {
+        log::warn!("[presets] Web3 presets file not found: {:?}", web3_path);
+        let _ = WEB3_PRESETS.set(default_web3_presets());
     }
 
     // Load networks
@@ -142,6 +183,16 @@ pub fn get_rpc_preset(name: &str) -> Option<RpcPreset> {
         .and_then(|p| p.get(name).cloned())
 }
 
+/// Get a Web3 preset by name
+pub fn get_web3_preset(name: &str) -> Option<Web3Preset> {
+    WEB3_PRESETS.get()
+        .or_else(|| {
+            let _ = WEB3_PRESETS.set(default_web3_presets());
+            WEB3_PRESETS.get()
+        })
+        .and_then(|p| p.get(name).cloned())
+}
+
 /// Get network config by name
 pub fn get_network(name: &str) -> Option<NetworkConfig> {
     get_networks().get(name).cloned()
@@ -159,6 +210,13 @@ pub fn list_rpc_presets() -> Vec<String> {
     RPC_PRESETS.get()
         .map(|p| p.keys().cloned().collect())
         .unwrap_or_else(|| vec!["gas_price".to_string(), "get_balance".to_string(), "get_nonce".to_string(), "block_number".to_string()])
+}
+
+/// List available Web3 preset names
+pub fn list_web3_presets() -> Vec<String> {
+    WEB3_PRESETS.get()
+        .map(|p| p.keys().cloned().collect())
+        .unwrap_or_else(|| vec!["weth_deposit".to_string(), "weth_withdraw".to_string()])
 }
 
 /// List available network names
@@ -211,6 +269,37 @@ fn default_rpc_presets() -> HashMap<String, RpcPreset> {
         append_latest: true,
         description: "Get transaction count (nonce) of wallet".to_string(),
     });
+    map
+}
+
+/// Default Web3 presets (fallback if config not found)
+fn default_web3_presets() -> HashMap<String, Web3Preset> {
+    let mut map = HashMap::new();
+
+    let mut weth_contracts = HashMap::new();
+    weth_contracts.insert("base".to_string(), "0x4200000000000000000000000000000000000006".to_string());
+    weth_contracts.insert("mainnet".to_string(), "0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2".to_string());
+
+    map.insert("weth_deposit".to_string(), Web3Preset {
+        abi: "weth".to_string(),
+        contracts: weth_contracts.clone(),
+        function: "deposit".to_string(),
+        params_registers: vec![],
+        value_register: Some("wrap_amount".to_string()),
+        static_params: vec![],
+        description: "Wrap ETH to WETH".to_string(),
+    });
+
+    map.insert("weth_withdraw".to_string(), Web3Preset {
+        abi: "weth".to_string(),
+        contracts: weth_contracts,
+        function: "withdraw".to_string(),
+        params_registers: vec!["unwrap_amount".to_string()],
+        value_register: None,
+        static_params: vec![],
+        description: "Unwrap WETH to ETH".to_string(),
+    });
+
     map
 }
 

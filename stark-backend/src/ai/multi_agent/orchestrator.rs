@@ -1,7 +1,9 @@
 //! Multi-agent orchestrator - manages transitions between agent modes
 
 use super::tools;
-use super::types::*;
+use super::types::{
+    AgentContext, AgentMode, Finding, ModeTransition, Relevance, TaskStatus,
+};
 use crate::tools::ToolDefinition;
 use serde_json::Value;
 
@@ -21,7 +23,7 @@ impl Orchestrator {
         Self {
             context: AgentContext {
                 original_request,
-                mode: AgentMode::Initializer,
+                mode: AgentMode::Explore, // Always start in Explore mode
                 ..Default::default()
             },
         }
@@ -50,7 +52,6 @@ impl Orchestrator {
     /// Get the system prompt for the current mode
     pub fn get_system_prompt(&self) -> String {
         let base_prompt = match self.context.mode {
-            AgentMode::Initializer => include_str!("prompts/initializer.md"),
             AgentMode::Explore => include_str!("prompts/explore.md"),
             AgentMode::Plan => include_str!("prompts/plan.md"),
             AgentMode::Perform => include_str!("prompts/perform.md"),
@@ -103,56 +104,17 @@ impl Orchestrator {
             summary.push_str(&format!("### Plan Goal\n\n{}\n\n", plan_summary));
         }
 
-        // Add task list
-        if !self.context.tasks.is_empty() {
-            let stats = self.context.get_stats();
-            summary.push_str(&format!("### Task List ({})\n\n", stats));
-
-            for task in &self.context.tasks {
-                let status_icon = match task.status {
-                    TaskStatus::Pending => "○",
-                    TaskStatus::InProgress => "◐",
-                    TaskStatus::Completed => "●",
-                    TaskStatus::Failed => "✗",
-                    TaskStatus::Blocked => "◌",
-                };
-                let deps = if task.blocked_by.is_empty() {
-                    String::new()
-                } else {
-                    format!(" (blocked by: {})", task.blocked_by.join(", "))
-                };
-                summary.push_str(&format!(
-                    "{} **{}**: {}{}\n",
-                    status_icon, task.id, task.subject, deps
-                ));
-
-                // Show result/error if completed/failed
-                if let Some(ref result) = task.result {
-                    summary.push_str(&format!("   → {}\n", result));
-                }
-                if let Some(ref error) = task.error {
-                    summary.push_str(&format!("   ✗ Error: {}\n", error));
-                }
-            }
-            summary.push('\n');
-
-            // Show ready tasks in perform mode
-            if self.context.mode == AgentMode::Perform {
-                let ready = self.context.get_ready_tasks();
-                if !ready.is_empty() {
-                    summary.push_str("**Ready to execute**: ");
-                    summary.push_str(&ready.iter().map(|t| t.id.as_str()).collect::<Vec<_>>().join(", "));
-                    summary.push_str("\n\n");
-                }
-            }
-        }
-
         // Add scratchpad if not empty
         if !self.context.scratchpad.is_empty() {
             summary.push_str("### Scratchpad\n\n");
             summary.push_str(&self.context.scratchpad);
             summary.push_str("\n\n");
         }
+
+        // Add task list (persistent memory) - always shown
+        summary.push_str("### Task List (Persistent Memory)\n\n");
+        summary.push_str(&self.context.tasks.format_display());
+        summary.push_str("\n\n");
 
         summary
     }
@@ -172,42 +134,36 @@ impl Orchestrator {
             tool_name, self.context.mode, self.context.mode_iterations
         );
 
-        let result = match tool_name {
-            // Initializer tools
-            "select_mode" => self.handle_select_mode(params),
-
+        match tool_name {
             // Explore tools
             "add_finding" => self.handle_add_finding(params),
             "ready_to_plan" => self.handle_ready_to_plan(params),
 
             // Plan tools
-            "create_task" => self.handle_create_task(params),
             "set_plan_summary" => self.handle_set_plan_summary(params),
             "ready_to_perform" => self.handle_ready_to_perform(params),
 
             // Perform tools
-            "start_task" => self.handle_start_task(params),
-            "complete_task" => self.handle_complete_task(params),
-            "fail_task" => self.handle_fail_task(params),
             "finish_execution" => self.handle_finish_execution(params),
 
             // Shared tools
             "add_note" => self.handle_add_note(params),
-            "get_task_list" => self.handle_get_task_list(),
+
+            // Task tools (persistent memory)
+            "create_task" => self.handle_create_task(params),
+            "add_task_note" => self.handle_add_task_note(params),
+            "start_task" => self.handle_start_task(),
+            "complete_task" => self.handle_complete_task(params),
+            "fail_task" => self.handle_fail_task(params),
+            "get_tasks" => self.handle_get_tasks(),
 
             _ => ProcessResult::Continue,
-        };
-
-        // Update blocked status after any task changes
-        self.context.update_blocked_status();
-
-        result
+        }
     }
 
     /// Check if we should force a transition due to hitting max iterations
     pub fn check_forced_transition(&mut self) -> Option<ModeTransition> {
         let (max_iterations, next_mode) = match self.context.mode {
-            AgentMode::Initializer => return None,
             AgentMode::Explore => (MAX_EXPLORE_ITERATIONS, AgentMode::Plan),
             AgentMode::Plan => (MAX_PLAN_ITERATIONS, AgentMode::Perform),
             AgentMode::Perform => (MAX_PERFORM_ITERATIONS, AgentMode::Perform),
@@ -243,23 +199,6 @@ impl Orchestrator {
     // =========================================================================
     // Tool handlers
     // =========================================================================
-
-    fn handle_select_mode(&mut self, params: &Value) -> ProcessResult {
-        let mode_str = params.get("mode").and_then(|v| v.as_str()).unwrap_or("");
-        let reasoning = params.get("reasoning").and_then(|v| v.as_str()).unwrap_or("");
-
-        if let Some(new_mode) = AgentMode::from_str(mode_str) {
-            let transition = ModeTransition {
-                from: self.context.mode,
-                to: new_mode,
-                reason: reasoning.to_string(),
-            };
-            self.transition_to(new_mode);
-            ProcessResult::Transition(transition)
-        } else {
-            ProcessResult::Error(format!("Invalid mode: {}", mode_str))
-        }
-    }
 
     fn handle_add_finding(&mut self, params: &Value) -> ProcessResult {
         let category = params.get("category").and_then(|v| v.as_str()).unwrap_or("other");
@@ -310,49 +249,6 @@ impl Orchestrator {
         ProcessResult::Transition(transition)
     }
 
-    fn handle_create_task(&mut self, params: &Value) -> ProcessResult {
-        let id = params.get("id").and_then(|v| v.as_str()).unwrap_or("");
-        let subject = params.get("subject").and_then(|v| v.as_str()).unwrap_or("");
-        let description = params.get("description").and_then(|v| v.as_str()).unwrap_or("");
-
-        if id.is_empty() || subject.is_empty() {
-            return ProcessResult::Error("Task requires 'id' and 'subject'".to_string());
-        }
-
-        // Check for duplicate ID
-        if self.context.get_task(id).is_some() {
-            return ProcessResult::Error(format!("Task '{}' already exists", id));
-        }
-
-        let blocked_by: Vec<String> = params
-            .get("blocked_by")
-            .and_then(|v| v.as_array())
-            .map(|arr| arr.iter().filter_map(|v| v.as_str().map(|s| s.to_string())).collect())
-            .unwrap_or_default();
-
-        let tool = params.get("tool").and_then(|v| v.as_str()).map(|s| s.to_string());
-        let priority = params.get("priority").and_then(|v| v.as_u64()).unwrap_or(100) as u32;
-
-        // Update 'blocks' for dependencies
-        for dep_id in &blocked_by {
-            if let Some(dep_task) = self.context.get_task_mut(dep_id) {
-                if !dep_task.blocks.contains(&id.to_string()) {
-                    dep_task.blocks.push(id.to_string());
-                }
-            }
-        }
-
-        let mut task = Task::new(id, subject, description);
-        task.blocked_by = blocked_by;
-        task.tool = tool;
-        task.priority = priority;
-
-        self.context.tasks.push(task);
-        self.context.update_blocked_status();
-
-        ProcessResult::ToolResult(format!("Task '{}' created: {}", id, subject))
-    }
-
     fn handle_set_plan_summary(&mut self, params: &Value) -> ProcessResult {
         if let Some(summary) = params.get("summary").and_then(|v| v.as_str()) {
             self.context.plan_summary = Some(summary.to_string());
@@ -363,109 +259,33 @@ impl Orchestrator {
     }
 
     fn handle_ready_to_perform(&mut self, _params: &Value) -> ProcessResult {
+        // Check task list - must have at least one task
         if self.context.tasks.is_empty() {
-            return ProcessResult::Error("Cannot perform without any tasks. Create tasks first.".to_string());
+            return ProcessResult::Error("Cannot perform without any tasks. Use create_task first.".to_string());
         }
 
         self.context.plan_ready = true;
+        let stats = self.context.tasks.stats();
         let transition = ModeTransition {
             from: AgentMode::Plan,
             to: AgentMode::Perform,
-            reason: format!("Plan ready with {} tasks", self.context.tasks.len()),
+            reason: format!("Plan ready with {} tasks", stats.total),
         };
         self.transition_to(AgentMode::Perform);
         ProcessResult::Transition(transition)
-    }
-
-    fn handle_start_task(&mut self, params: &Value) -> ProcessResult {
-        let task_id = params.get("task_id").and_then(|v| v.as_str()).unwrap_or("");
-
-        if let Some(task) = self.context.get_task_mut(task_id) {
-            if task.status == TaskStatus::Blocked {
-                return ProcessResult::Error(format!(
-                    "Task '{}' is blocked by: {}",
-                    task_id,
-                    task.blocked_by.join(", ")
-                ));
-            }
-            if task.status != TaskStatus::Pending {
-                return ProcessResult::Error(format!(
-                    "Task '{}' is not pending (status: {})",
-                    task_id, task.status
-                ));
-            }
-            task.status = TaskStatus::InProgress;
-            ProcessResult::ToolResult(format!("Started task '{}': {}", task_id, task.subject))
-        } else {
-            ProcessResult::Error(format!("Task '{}' not found", task_id))
-        }
-    }
-
-    fn handle_complete_task(&mut self, params: &Value) -> ProcessResult {
-        let task_id = params.get("task_id").and_then(|v| v.as_str()).unwrap_or("");
-        let result = params.get("result").and_then(|v| v.as_str()).unwrap_or("");
-
-        if let Some(task) = self.context.get_task_mut(task_id) {
-            task.status = TaskStatus::Completed;
-            task.result = Some(result.to_string());
-            ProcessResult::ToolResult(format!("Completed task '{}': {}", task_id, result))
-        } else {
-            ProcessResult::Error(format!("Task '{}' not found", task_id))
-        }
-    }
-
-    fn handle_fail_task(&mut self, params: &Value) -> ProcessResult {
-        let task_id = params.get("task_id").and_then(|v| v.as_str()).unwrap_or("");
-        let error = params.get("error").and_then(|v| v.as_str()).unwrap_or("");
-
-        if let Some(task) = self.context.get_task_mut(task_id) {
-            task.status = TaskStatus::Failed;
-            task.error = Some(error.to_string());
-            ProcessResult::ToolResult(format!("Task '{}' failed: {}", task_id, error))
-        } else {
-            ProcessResult::Error(format!("Task '{}' not found", task_id))
-        }
-    }
-
-    fn handle_get_task_list(&self) -> ProcessResult {
-        if self.context.tasks.is_empty() {
-            return ProcessResult::ToolResult("No tasks in the plan.".to_string());
-        }
-
-        let stats = self.context.get_stats();
-        let mut output = format!("## Task List ({})\n\n", stats);
-
-        for task in &self.context.tasks {
-            let status_str = format!("{}", task.status);
-            let deps = if task.blocked_by.is_empty() {
-                String::new()
-            } else {
-                format!(" | blocked by: {}", task.blocked_by.join(", "))
-            };
-            output.push_str(&format!(
-                "- **{}** [{}]: {}{}\n",
-                task.id, status_str, task.subject, deps
-            ));
-            if let Some(ref result) = task.result {
-                output.push_str(&format!("  Result: {}\n", result));
-            }
-            if let Some(ref error) = task.error {
-                output.push_str(&format!("  Error: {}\n", error));
-            }
-        }
-
-        ProcessResult::ToolResult(output)
     }
 
     fn handle_finish_execution(&mut self, params: &Value) -> ProcessResult {
         let summary = params.get("summary").and_then(|v| v.as_str()).unwrap_or("");
         let follow_up = params.get("follow_up").and_then(|v| v.as_str());
 
-        let stats = self.context.get_stats();
+        let stats = self.context.tasks.stats();
         log::info!(
-            "[ORCHESTRATOR] Execution finished: {} - {}",
+            "[ORCHESTRATOR] Execution finished: {} - {} total ({} completed, {} failed)",
             summary,
-            stats
+            stats.total,
+            stats.completed,
+            stats.failed
         );
 
         if let Some(fu) = follow_up {
@@ -473,6 +293,164 @@ impl Orchestrator {
         }
 
         ProcessResult::Complete(summary.to_string())
+    }
+
+    // =========================================================================
+    // Task handlers (persistent memory)
+    // =========================================================================
+
+    /// Create a new task (Plan mode only)
+    fn handle_create_task(&mut self, params: &Value) -> ProcessResult {
+        // Only allow in Plan mode
+        if self.context.mode != AgentMode::Plan {
+            return ProcessResult::Error(
+                "create_task is only available in Plan mode. Use add_task_note to add notes in other modes.".to_string()
+            );
+        }
+
+        let subject = match params.get("subject").and_then(|v| v.as_str()) {
+            Some(s) if !s.is_empty() => s,
+            _ => return ProcessResult::Error("Missing or empty 'subject' parameter".to_string()),
+        };
+
+        let id = self.context.tasks.add(subject);
+        let short_id = &id[..8];
+
+        // Add initial note if provided
+        if let Some(note) = params.get("note").and_then(|v| v.as_str()) {
+            if let Some(task) = self.context.tasks.get_mut(&id) {
+                task.add_note(note);
+            }
+        }
+
+        ProcessResult::ToolResult(format!(
+            "Task created [{}]: {}",
+            short_id, subject
+        ))
+    }
+
+    /// Add a note to a task (any mode)
+    fn handle_add_task_note(&mut self, params: &Value) -> ProcessResult {
+        let id = match params.get("id").and_then(|v| v.as_str()) {
+            Some(s) if !s.is_empty() => s,
+            _ => return ProcessResult::Error("Missing or empty 'id' parameter".to_string()),
+        };
+
+        let note = match params.get("note").and_then(|v| v.as_str()) {
+            Some(s) if !s.is_empty() => s,
+            _ => return ProcessResult::Error("Missing or empty 'note' parameter".to_string()),
+        };
+
+        let task = match self.context.tasks.get_mut(id) {
+            Some(t) => t,
+            None => return ProcessResult::Error(format!("Task '{}' not found", id)),
+        };
+
+        let short_id = task.short_id().to_string();
+        let subject = task.subject.clone();
+        task.add_note(note);
+
+        ProcessResult::ToolResult(format!(
+            "Note added to task [{}] '{}': {}",
+            short_id, subject, note
+        ))
+    }
+
+    /// Start the next pending task (FIFO) for execution (Perform mode only)
+    fn handle_start_task(&mut self) -> ProcessResult {
+        // Only allow in Perform mode
+        if self.context.mode != AgentMode::Perform {
+            return ProcessResult::Error(
+                "start_task is only available in Perform mode".to_string()
+            );
+        }
+
+        match self.context.tasks.next_pending() {
+            Some(task) => {
+                task.set_status(TaskStatus::InProgress, Some("Started execution"));
+                let task_details = task.format_display();
+                ProcessResult::ToolResult(format!(
+                    "Started task:\n{}\n\nNow execute this task.",
+                    task_details
+                ))
+            }
+            None => ProcessResult::ToolResult(
+                "No pending tasks. All tasks have been started or completed!".to_string()
+            ),
+        }
+    }
+
+    /// Complete a task with a result (Perform mode only)
+    fn handle_complete_task(&mut self, params: &Value) -> ProcessResult {
+        // Only allow in Perform mode
+        if self.context.mode != AgentMode::Perform {
+            return ProcessResult::Error(
+                "complete_task is only available in Perform mode".to_string()
+            );
+        }
+
+        let id = match params.get("id").and_then(|v| v.as_str()) {
+            Some(s) if !s.is_empty() => s,
+            _ => return ProcessResult::Error("Missing or empty 'id' parameter".to_string()),
+        };
+
+        let result = match params.get("result").and_then(|v| v.as_str()) {
+            Some(s) if !s.is_empty() => s,
+            _ => return ProcessResult::Error("Missing or empty 'result' parameter".to_string()),
+        };
+
+        let task = match self.context.tasks.get_mut(id) {
+            Some(t) => t,
+            None => return ProcessResult::Error(format!("Task '{}' not found", id)),
+        };
+
+        let short_id = task.short_id().to_string();
+        let subject = task.subject.clone();
+        task.complete(result);
+
+        ProcessResult::ToolResult(format!(
+            "✅ Task completed [{}] '{}': {}",
+            short_id, subject, result
+        ))
+    }
+
+    /// Fail a task with an error (Perform mode only)
+    fn handle_fail_task(&mut self, params: &Value) -> ProcessResult {
+        // Only allow in Perform mode
+        if self.context.mode != AgentMode::Perform {
+            return ProcessResult::Error(
+                "fail_task is only available in Perform mode".to_string()
+            );
+        }
+
+        let id = match params.get("id").and_then(|v| v.as_str()) {
+            Some(s) if !s.is_empty() => s,
+            _ => return ProcessResult::Error("Missing or empty 'id' parameter".to_string()),
+        };
+
+        let error = match params.get("error").and_then(|v| v.as_str()) {
+            Some(s) if !s.is_empty() => s,
+            _ => return ProcessResult::Error("Missing or empty 'error' parameter".to_string()),
+        };
+
+        let task = match self.context.tasks.get_mut(id) {
+            Some(t) => t,
+            None => return ProcessResult::Error(format!("Task '{}' not found", id)),
+        };
+
+        let short_id = task.short_id().to_string();
+        let subject = task.subject.clone();
+        task.fail(error);
+
+        ProcessResult::ToolResult(format!(
+            "❌ Task failed [{}] '{}': {}",
+            short_id, subject, error
+        ))
+    }
+
+    /// Get the full task list display
+    fn handle_get_tasks(&self) -> ProcessResult {
+        ProcessResult::ToolResult(self.context.tasks.format_display())
     }
 }
 

@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
-import { ChevronDown, ChevronRight, DollarSign, Cpu, Clock, Globe, Terminal, Wrench, Brain, CheckCircle, XCircle, Loader2, Zap, Database } from 'lucide-react';
+import { ChevronDown, ChevronRight, DollarSign, Cpu, Clock, Globe, Terminal, Wrench, Brain, CheckCircle, XCircle, Loader2, Zap, Database, ListTodo } from 'lucide-react';
 import clsx from 'clsx';
 import { useGateway } from '@/hooks/useGateway';
 import type { ExecutionEvent, X402PaymentEvent } from '@/types';
@@ -100,12 +100,42 @@ interface RegisterEntry {
   age_secs: number;
 }
 
+interface AgentTaskNote {
+  content: string;
+  timestamp: string;
+}
+
+interface AgentTask {
+  id: string;
+  subject: string;
+  status: 'pending' | 'in_progress' | 'completed' | 'failed';
+  notes: AgentTaskNote[];
+  result?: string;
+  error?: string;
+  created_at: string;
+  updated_at: string;
+}
+
+interface AgentTasksState {
+  mode: string;
+  modeLabel: string;
+  tasks: AgentTask[];
+  stats: {
+    total: number;
+    pending: number;
+    in_progress: number;
+    completed: number;
+    failed: number;
+  };
+}
+
 export default function DebugPanel({ className }: DebugPanelProps) {
   const [executions, setExecutions] = useState<Map<string, DebugTask>>(new Map());
   const [payments, setPayments] = useState<X402PaymentEvent[]>([]);
   const [registers, setRegisters] = useState<Record<string, RegisterEntry>>({});
+  const [agentTasks, setAgentTasks] = useState<AgentTasksState | null>(null);
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
-  const [activeTab, setActiveTab] = useState<'tasks' | 'payments' | 'registry'>('tasks');
+  const [activeTab, setActiveTab] = useState<'tasks' | 'payments' | 'registry' | 'agent'>('tasks');
   const [, forceUpdate] = useState(0);
   const { on, off } = useGateway();
 
@@ -353,6 +383,21 @@ export default function DebugPanel({ className }: DebugPanelProps) {
     setRegisters(event.registers || {});
   }, []);
 
+  const handleAgentTasksUpdate = useCallback((data: unknown) => {
+    const event = data as {
+      mode: string;
+      mode_label: string;
+      tasks: AgentTask[];
+      stats: AgentTasksState['stats'];
+    };
+    setAgentTasks({
+      mode: event.mode,
+      modeLabel: event.mode_label,
+      tasks: event.tasks || [],
+      stats: event.stats || { total: 0, pending: 0, in_progress: 0, completed: 0, failed: 0 },
+    });
+  }, []);
+
   useEffect(() => {
     on('execution.started', handleExecutionStarted);
     on('execution.thinking', handleExecutionThinking);
@@ -364,6 +409,7 @@ export default function DebugPanel({ className }: DebugPanelProps) {
     on('tool.result', handleToolResult);
     on('x402.payment', handleX402Payment);
     on('register.update', handleRegisterUpdate);
+    on('agent.tasks_update', handleAgentTasksUpdate);
 
     return () => {
       off('execution.started', handleExecutionStarted);
@@ -376,8 +422,9 @@ export default function DebugPanel({ className }: DebugPanelProps) {
       off('tool.result', handleToolResult);
       off('x402.payment', handleX402Payment);
       off('register.update', handleRegisterUpdate);
+      off('agent.tasks_update', handleAgentTasksUpdate);
     };
-  }, [on, off, handleExecutionStarted, handleExecutionThinking, handleTaskStarted, handleTaskUpdated, handleTaskCompleted, handleExecutionCompleted, handleToolExecution, handleToolResult, handleX402Payment, handleRegisterUpdate]);
+  }, [on, off, handleExecutionStarted, handleExecutionThinking, handleTaskStarted, handleTaskUpdated, handleTaskCompleted, handleExecutionCompleted, handleToolExecution, handleToolResult, handleX402Payment, handleRegisterUpdate, handleAgentTasksUpdate]);
 
   const toggleCollapse = (taskId: string) => {
     setCollapsed((prev) => {
@@ -655,6 +702,25 @@ export default function DebugPanel({ className }: DebugPanelProps) {
             </span>
           )}
         </button>
+        <button
+          onClick={() => setActiveTab('agent')}
+          className={clsx(
+            'flex-1 px-4 py-2 text-sm font-medium transition-colors',
+            activeTab === 'agent'
+              ? 'bg-slate-800 text-white border-b-2 border-orange-500'
+              : 'text-slate-400 hover:text-white hover:bg-slate-800/50'
+          )}
+        >
+          <ListTodo className="w-4 h-4 inline mr-2" />
+          Agent
+          {agentTasks && agentTasks.stats.total > 0 && (
+            <span className="ml-2 text-xs">
+              {agentTasks.stats.in_progress > 0 && <span className="text-cyan-400">{agentTasks.stats.in_progress}</span>}
+              {agentTasks.stats.completed > 0 && <span className="text-green-400 ml-1">✓{agentTasks.stats.completed}</span>}
+              {agentTasks.stats.failed > 0 && <span className="text-red-400 ml-1">✗{agentTasks.stats.failed}</span>}
+            </span>
+          )}
+        </button>
       </div>
 
       {/* Tab content */}
@@ -778,6 +844,121 @@ export default function DebugPanel({ className }: DebugPanelProps) {
                   </div>
                 ))}
               </div>
+            )}
+          </div>
+        )}
+
+        {activeTab === 'agent' && (
+          <div className="p-2">
+            {!agentTasks || agentTasks.tasks.length === 0 ? (
+              <div className="text-center text-slate-500 py-8">
+                <ListTodo className="w-8 h-8 mx-auto mb-2 opacity-50" />
+                <p>No agent tasks</p>
+                <p className="text-xs mt-1">Tasks appear during multi-agent execution</p>
+              </div>
+            ) : (
+              <>
+                {/* Mode indicator and stats */}
+                <div className="mb-4 p-3 bg-gradient-to-r from-orange-500/10 to-amber-500/10 rounded-lg border border-orange-500/20">
+                  <div className="flex items-center justify-between mb-2">
+                    <div className="flex items-center gap-2">
+                      <Brain className="w-4 h-4 text-orange-400" />
+                      <span className="text-sm font-semibold text-orange-400">
+                        {agentTasks.modeLabel}
+                      </span>
+                      <span className="text-xs px-1.5 py-0.5 bg-orange-500/20 text-orange-300 rounded uppercase">
+                        {agentTasks.mode}
+                      </span>
+                    </div>
+                  </div>
+                  <div className="text-xs text-slate-400">
+                    {agentTasks.stats.total} task{agentTasks.stats.total !== 1 ? 's' : ''} · {' '}
+                    {agentTasks.stats.pending > 0 && <span className="text-slate-300">{agentTasks.stats.pending} pending</span>}
+                    {agentTasks.stats.in_progress > 0 && <span className="text-cyan-400 ml-2">{agentTasks.stats.in_progress} in progress</span>}
+                    {agentTasks.stats.completed > 0 && <span className="text-green-400 ml-2">{agentTasks.stats.completed} done</span>}
+                    {agentTasks.stats.failed > 0 && <span className="text-red-400 ml-2">{agentTasks.stats.failed} failed</span>}
+                  </div>
+                </div>
+
+                {/* Task list */}
+                <div className="space-y-2">
+                  {agentTasks.tasks.map((task) => {
+                    const StatusIcon = () => {
+                      switch (task.status) {
+                        case 'pending':
+                          return <span className="text-slate-500">⏳</span>;
+                        case 'in_progress':
+                          return <Loader2 className="w-4 h-4 text-cyan-400 animate-spin" />;
+                        case 'completed':
+                          return <CheckCircle className="w-4 h-4 text-green-400" />;
+                        case 'failed':
+                          return <XCircle className="w-4 h-4 text-red-400" />;
+                        default:
+                          return null;
+                      }
+                    };
+
+                    return (
+                      <div
+                        key={task.id}
+                        className={clsx(
+                          'p-3 bg-slate-800 rounded-lg border transition-colors',
+                          task.status === 'in_progress' && 'border-cyan-500/50 bg-cyan-500/5',
+                          task.status === 'completed' && 'border-green-500/30',
+                          task.status === 'failed' && 'border-red-500/30',
+                          task.status === 'pending' && 'border-slate-700'
+                        )}
+                      >
+                        <div className="flex items-start gap-2">
+                          <div className="mt-0.5 shrink-0">
+                            <StatusIcon />
+                          </div>
+                          <div className="flex-1 min-w-0">
+                            <div className="flex items-center gap-2 mb-1">
+                              <span className={clsx(
+                                'text-sm font-medium',
+                                task.status === 'completed' && 'text-slate-400',
+                                task.status === 'failed' && 'text-red-400',
+                                task.status === 'in_progress' && 'text-cyan-300',
+                                task.status === 'pending' && 'text-slate-300'
+                              )}>
+                                {task.subject}
+                              </span>
+                              <span className="text-[10px] text-slate-600 font-mono">
+                                [{task.id.slice(0, 8)}]
+                              </span>
+                            </div>
+
+                            {/* Result or error */}
+                            {task.result && (
+                              <div className="text-xs text-green-400/80 bg-green-500/10 px-2 py-1 rounded mb-2">
+                                → {task.result}
+                              </div>
+                            )}
+                            {task.error && (
+                              <div className="text-xs text-red-400/80 bg-red-500/10 px-2 py-1 rounded mb-2">
+                                ✗ {task.error}
+                              </div>
+                            )}
+
+                            {/* Notes */}
+                            {task.notes.length > 0 && (
+                              <div className="mt-2 space-y-1">
+                                {task.notes.map((note, idx) => (
+                                  <div key={idx} className="text-xs text-slate-500 flex gap-2">
+                                    <span className="text-slate-600 shrink-0">•</span>
+                                    <span>{note.content}</span>
+                                  </div>
+                                ))}
+                              </div>
+                            )}
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </>
             )}
           </div>
         )}

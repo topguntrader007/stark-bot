@@ -729,6 +729,34 @@ impl Database {
             [],
         )?;
 
+        // Agent contexts table - multi-agent orchestrator state persistence
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS agent_contexts (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                session_id INTEGER NOT NULL UNIQUE,
+                original_request TEXT NOT NULL,
+                mode TEXT NOT NULL DEFAULT 'explore',
+                context_sufficient INTEGER NOT NULL DEFAULT 0,
+                plan_ready INTEGER NOT NULL DEFAULT 0,
+                mode_iterations INTEGER NOT NULL DEFAULT 0,
+                total_iterations INTEGER NOT NULL DEFAULT 0,
+                exploration_notes TEXT NOT NULL DEFAULT '[]',
+                findings TEXT NOT NULL DEFAULT '[]',
+                plan_summary TEXT,
+                scratchpad TEXT NOT NULL DEFAULT '',
+                tasks_json TEXT NOT NULL DEFAULT '{\"tasks\":[]}',
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                FOREIGN KEY (session_id) REFERENCES chat_sessions(id) ON DELETE CASCADE
+            )",
+            [],
+        )?;
+
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_agent_contexts_session ON agent_contexts(session_id)",
+            [],
+        )?;
+
         Ok(())
     }
 

@@ -1,3 +1,4 @@
+import { useState, useEffect } from 'react';
 import {
   Home,
   MessageSquare,
@@ -22,12 +23,29 @@ import { useAuth } from '@/hooks/useAuth';
 
 export default function Sidebar() {
   const { logout } = useAuth();
+  const [version, setVersion] = useState<string | null>(null);
+
+  useEffect(() => {
+    fetch('/api/version')
+      .then(res => {
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        return res.json();
+      })
+      .then(data => setVersion(data.version))
+      .catch(err => {
+        console.warn('Failed to fetch version:', err);
+        setVersion(null);
+      });
+  }, []);
 
   return (
     <aside className="w-64 h-screen sticky top-0 bg-slate-800 flex flex-col border-r border-slate-700">
       {/* Header */}
       <div className="p-6 border-b border-slate-700">
         <h1 className="text-2xl font-bold text-stark-400">StarkBot</h1>
+        {version && (
+          <span className="text-xs text-slate-500">v{version}</span>
+        )}
       </div>
 
       {/* Navigation */}

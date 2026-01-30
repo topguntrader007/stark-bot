@@ -2,10 +2,14 @@
 //!
 //! This tool loads ABIs from the /abis folder and encodes function calls,
 //! so the LLM doesn't have to deal with hex-encoded calldata.
+//!
+//! Supports presets for common operations (weth_deposit, weth_withdraw, etc.)
+//! that read parameters from registers.
 
 use crate::gateway::events::EventBroadcaster;
 use crate::gateway::protocol::GatewayEvent;
 use crate::tools::builtin::web3_tx::parse_u256;
+use crate::tools::presets::{get_web3_preset, list_web3_presets};
 use crate::tools::registry::Tool;
 use crate::tools::types::{
     PropertySchema, ToolContext, ToolDefinition, ToolGroup, ToolInputSchema, ToolResult,
@@ -34,10 +38,21 @@ impl Web3FunctionCallTool {
         let mut properties = HashMap::new();
 
         properties.insert(
+            "preset".to_string(),
+            PropertySchema {
+                schema_type: "string".to_string(),
+                description: "Use a preset configuration (e.g., 'weth_deposit', 'weth_withdraw'). When using a preset, only 'network' is required - other params come from registers.".to_string(),
+                default: None,
+                items: None,
+                enum_values: None,
+            },
+        );
+
+        properties.insert(
             "abi".to_string(),
             PropertySchema {
                 schema_type: "string".to_string(),
-                description: "Name of the ABI file (without .json). Available: 'erc20', '0x_settler'".to_string(),
+                description: "Name of the ABI file (without .json). Available: 'erc20', 'weth', '0x_settler'. Not needed if using preset.".to_string(),
                 default: None,
                 items: None,
                 enum_values: None,
@@ -124,11 +139,11 @@ impl Web3FunctionCallTool {
         Web3FunctionCallTool {
             definition: ToolDefinition {
                 name: "web3_function_call".to_string(),
-                description: "Call a smart contract function using a known ABI. Handles parameter encoding automatically. Use for ERC20 approve/transfer, or any contract with an ABI in the /abis folder. For read-only calls (balanceOf, etc), set call_only=true.".to_string(),
+                description: "Call a smart contract function. Use 'preset' for common operations (weth_deposit, weth_withdraw, weth_balance) which read params from registers. Or specify abi/contract/function directly for custom calls.".to_string(),
                 input_schema: ToolInputSchema {
                     schema_type: "object".to_string(),
                     properties,
-                    required: vec!["abi".to_string(), "contract".to_string(), "function".to_string()],
+                    required: vec![], // No required fields - either preset or abi/contract/function
                 },
                 group: ToolGroup::Web,
             },
@@ -465,9 +480,10 @@ struct AbiFile {
 
 #[derive(Debug, Deserialize)]
 struct Web3FunctionCallParams {
-    abi: String,
-    contract: String,
-    function: String,
+    preset: Option<String>,
+    abi: Option<String>,
+    contract: Option<String>,
+    function: Option<String>,
     #[serde(default)]
     params: Vec<Value>,
     #[serde(default = "default_value")]
@@ -503,8 +519,98 @@ impl Tool for Web3FunctionCallTool {
             return ToolResult::error("Network must be 'base' or 'mainnet'");
         }
 
+        // Resolve preset or use direct params
+        let (abi_name, contract_addr, function_name, call_params, value) = if let Some(ref preset_name) = params.preset {
+            // Using preset - load config and resolve from registers
+            let preset = match get_web3_preset(preset_name) {
+                Some(p) => p,
+                None => {
+                    let available = list_web3_presets().join(", ");
+                    return ToolResult::error(format!(
+                        "Unknown preset '{}'. Available: {}",
+                        preset_name, available
+                    ));
+                }
+            };
+
+            // Get contract address for network
+            let contract = match preset.contracts.get(&params.network) {
+                Some(c) => c.clone(),
+                None => {
+                    return ToolResult::error(format!(
+                        "Preset '{}' has no contract for network '{}'",
+                        preset_name, params.network
+                    ));
+                }
+            };
+
+            // Read params from registers
+            let mut resolved_params = Vec::new();
+            for reg_key in &preset.params_registers {
+                match context.registers.get(reg_key) {
+                    Some(v) => {
+                        // Convert JSON value to string for params
+                        let param_str = match v.as_str() {
+                            Some(s) => s.to_string(),
+                            None => v.to_string().trim_matches('"').to_string(),
+                        };
+                        resolved_params.push(json!(param_str));
+                    }
+                    None => {
+                        return ToolResult::error(format!(
+                            "Preset '{}' requires register '{}' but it's not set",
+                            preset_name, reg_key
+                        ));
+                    }
+                }
+            }
+
+            // Read value from register if specified
+            let value = if let Some(ref val_reg) = preset.value_register {
+                match context.registers.get(val_reg) {
+                    Some(v) => {
+                        match v.as_str() {
+                            Some(s) => s.to_string(),
+                            None => v.to_string().trim_matches('"').to_string(),
+                        }
+                    }
+                    None => {
+                        return ToolResult::error(format!(
+                            "Preset '{}' requires register '{}' but it's not set",
+                            preset_name, val_reg
+                        ));
+                    }
+                }
+            } else {
+                "0".to_string()
+            };
+
+            log::info!(
+                "[web3_function_call] Using preset '{}': {}::{}",
+                preset_name, preset.abi, preset.function
+            );
+
+            (preset.abi, contract, preset.function, resolved_params, value)
+        } else {
+            // Direct params - require abi, contract, function
+            let abi = match params.abi.clone() {
+                Some(a) => a,
+                None => return ToolResult::error("Missing 'abi' parameter (required without preset)"),
+            };
+            let contract = match params.contract.clone() {
+                Some(c) => c,
+                None => return ToolResult::error("Missing 'contract' parameter (required without preset)"),
+            };
+            let function = match params.function.clone() {
+                Some(f) => f,
+                None => return ToolResult::error("Missing 'function' parameter (required without preset)"),
+            };
+
+            (abi, contract, function, params.params.clone(), params.value.clone())
+        };
+
         // Load ABI
-        let abi_file = match self.load_abi(&params.abi) {
+        let abi_file = match self.load_abi(&abi_name) {
             Ok(a) => a,
             Err(e) => return ToolResult::error(e),
         };
@@ -516,26 +622,26 @@ impl Tool for Web3FunctionCallTool {
         };
 
         // Find function
-        let function = match self.find_function(&abi, &params.function) {
+        let function = match self.find_function(&abi, &function_name) {
             Ok(f) => f,
             Err(e) => return ToolResult::error(e),
         };
 
         // Encode call
-        let calldata = match self.encode_call(function, &params.params) {
+        let calldata = match self.encode_call(function, &call_params) {
             Ok(d) => d,
             Err(e) => return ToolResult::error(e),
         };
 
         // Parse contract address
-        let contract: Address = match params.contract.parse() {
+        let contract: Address = match contract_addr.parse() {
             Ok(a) => a,
-            Err(_) => return ToolResult::error(format!("Invalid contract address: {}", params.contract)),
+            Err(_) => return ToolResult::error(format!("Invalid contract address: {}", contract_addr)),
         };
 
         log::info!(
             "[web3_function_call] {}::{}({:?}) on {} (call_only={})",
-            params.abi, params.function, params.params, params.network, params.call_only
+            abi_name, function_name, call_params, params.network, params.call_only
         );
 
         if params.call_only {
@@ -547,9 +653,10 @@ impl Tool for Web3FunctionCallTool {
 
                     ToolResult::success(serde_json::to_string_pretty(&decoded).unwrap_or_default())
                         .with_metadata(json!({
-                            "abi": params.abi,
-                            "contract": params.contract,
-                            "function": params.function,
+                            "preset": params.preset,
+                            "abi": abi_name,
+                            "contract": contract_addr,
+                            "function": function_name,
                             "result": decoded,
                         }))
                 }
@@ -557,16 +664,16 @@ impl Tool for Web3FunctionCallTool {
             }
         } else {
             // Transaction - use parse_u256 for correct decimal/hex handling
-            let value: U256 = match parse_u256(&params.value) {
+            let tx_value: U256 = match parse_u256(&value) {
                 Ok(v) => v,
-                Err(e) => return ToolResult::error(format!("Invalid value: {} - {}", params.value, e)),
+                Err(e) => return ToolResult::error(format!("Invalid value: {} - {}", value, e)),
             };
 
             match Self::send_transaction(
                 &params.network,
                 contract,
                 calldata,
-                value,
+                tx_value,
                 context.broadcaster.as_ref(),
                 context.channel_id,
             ).await {
@@ -579,11 +686,12 @@ impl Tool for Web3FunctionCallTool {
 
                     ToolResult::success(format!(
                         "Transaction {}\nFunction: {}::{}()\nFrom: {}\nTo: {}\nHash: {}\nExplorer: {}/{}",
-                        status, params.abi, params.function, from, params.contract, tx_hash, explorer, tx_hash
+                        status, abi_name, function_name, from, contract_addr, tx_hash, explorer, tx_hash
                     )).with_metadata(json!({
-                        "abi": params.abi,
-                        "contract": params.contract,
-                        "function": params.function,
+                        "preset": params.preset,
+                        "abi": abi_name,
+                        "contract": contract_addr,
+                        "function": function_name,
                         "from": from,
                         "tx_hash": tx_hash,
                         "status": status,

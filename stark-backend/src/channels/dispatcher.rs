@@ -1,4 +1,5 @@
 use crate::ai::{
+    multi_agent::{Orchestrator, ProcessResult as OrchestratorResult},
     AiClient, ArchetypeId, ArchetypeRegistry, Message, MessageRole, ModelArchetype,
     ThinkingLevel, ToolCall, ToolHistoryEntry, ToolResponse,
 };
@@ -516,6 +517,7 @@ impl MessageDispatcher {
     }
 
     /// Generate a response with tool execution loop (supports both native and text-based tool calling)
+    /// Now always runs in multi-agent mode with Explore → Plan → Perform flow
     async fn generate_with_tool_loop(
         &self,
         client: &AiClient,
@@ -523,16 +525,70 @@ impl MessageDispatcher {
         tool_config: &ToolConfig,
         tool_context: &ToolContext,
         _identity_id: &str,
-        _session_id: i64,
+        session_id: i64,
         original_message: &NormalizedMessage,
         archetype_id: ArchetypeId,
     ) -> Result<String, String> {
+        // Load existing agent context or create new one
+        let mut orchestrator = match self.db.get_agent_context(session_id) {
+            Ok(Some(context)) => {
+                log::info!(
+                    "[MULTI_AGENT] Resuming session {} in {} mode with {} tasks",
+                    session_id,
+                    context.mode,
+                    context.tasks.stats().total
+                );
+                Orchestrator::from_context(context)
+            }
+            Ok(None) => {
+                log::info!(
+                    "[MULTI_AGENT] Starting new orchestrator for session {}",
+                    session_id
+                );
+                Orchestrator::new(original_message.text.clone())
+            }
+            Err(e) => {
+                log::warn!(
+                    "[MULTI_AGENT] Failed to load context for session {}: {}, starting fresh",
+                    session_id, e
+                );
+                Orchestrator::new(original_message.text.clone())
+            }
+        };
+
+        // Broadcast initial mode
+        let initial_mode = orchestrator.current_mode();
+        self.broadcaster.broadcast(GatewayEvent::agent_mode_change(
+            original_message.channel_id,
+            &initial_mode.to_string(),
+            initial_mode.label(),
+            Some(if initial_mode == crate::ai::multi_agent::AgentMode::Explore {
+                "Starting request processing"
+            } else {
+                "Resuming from previous state"
+            }),
+        ));
+
+        // Broadcast initial task state
+        self.broadcast_tasks_update(original_message.channel_id, &orchestrator);
+
+        log::info!(
+            "[MULTI_AGENT] Started in {} mode for request: {}",
+            initial_mode,
+            original_message.text.chars().take(50).collect::<String>()
+        );
+
+        // Get regular tools from registry
         let mut tools = self.tool_registry.get_tool_definitions(tool_config);
 
         // Add skills as a "use_skill" pseudo-tool if any are enabled
         if let Some(skill_tool) = self.create_skill_tool_definition() {
             tools.push(skill_tool);
         }
+
+        // Add orchestrator mode-specific tools
+        let mode_tools = orchestrator.get_mode_tools();
+        tools.extend(mode_tools);
 
         // Debug: Log available tools
         log::info!(
@@ -575,9 +631,15 @@ impl MessageDispatcher {
 
         // Branch based on archetype type
         if archetype.uses_native_tool_calling() {
-            self.generate_with_native_tools(client, messages, tools, tool_config, tool_context, original_message, archetype).await
+            self.generate_with_native_tools_orchestrated(
+                client, messages, tools, tool_config, tool_context,
+                original_message, archetype, &mut orchestrator, session_id
+            ).await
         } else {
-            self.generate_with_text_tools(client, messages, tools, tool_config, tool_context, original_message, archetype).await
+            self.generate_with_text_tools_orchestrated(
+                client, messages, tools, tool_config, tool_context,
+                original_message, archetype, &mut orchestrator, session_id
+            ).await
         }
     }
 
@@ -638,37 +700,108 @@ impl MessageDispatcher {
         })
     }
 
-    /// Generate response using native API tool calling (Kimi, OpenAI, Claude)
-    async fn generate_with_native_tools(
+    /// Broadcast task list update event for the debug panel
+    fn broadcast_tasks_update(&self, channel_id: i64, orchestrator: &Orchestrator) {
+        let context = orchestrator.context();
+        let mode = context.mode;
+        let stats = context.tasks.stats();
+
+        // Serialize tasks to JSON
+        let tasks_json = serde_json::to_value(context.tasks.all()).unwrap_or_default();
+        let stats_json = serde_json::json!({
+            "total": stats.total,
+            "pending": stats.pending,
+            "in_progress": stats.in_progress,
+            "completed": stats.completed,
+            "failed": stats.failed
+        });
+
+        self.broadcaster.broadcast(GatewayEvent::agent_tasks_update(
+            channel_id,
+            &mode.to_string(),
+            mode.label(),
+            tasks_json,
+            stats_json,
+        ));
+    }
+
+    /// Generate response using native API tool calling with multi-agent orchestration
+    async fn generate_with_native_tools_orchestrated(
         &self,
         client: &AiClient,
         messages: Vec<Message>,
-        tools: Vec<ToolDefinition>,
+        mut tools: Vec<ToolDefinition>,
         tool_config: &ToolConfig,
         tool_context: &ToolContext,
         original_message: &NormalizedMessage,
         archetype: &dyn ModelArchetype,
+        orchestrator: &mut Orchestrator,
+        session_id: i64,
     ) -> Result<String, String> {
-        // Enhance system prompt with tool awareness (even for native tool calling)
+        // Build conversation with orchestrator's system prompt prepended
         let mut conversation = messages.clone();
         if let Some(system_msg) = conversation.first_mut() {
             if system_msg.role == MessageRole::System {
-                system_msg.content = archetype.enhance_system_prompt(&system_msg.content, &tools);
+                // Prepend orchestrator context to the existing system prompt
+                let orchestrator_prompt = orchestrator.get_system_prompt();
+                system_msg.content = format!(
+                    "{}\n\n---\n\n{}",
+                    orchestrator_prompt,
+                    archetype.enhance_system_prompt(&system_msg.content, &tools)
+                );
             }
         }
 
         let mut tool_history: Vec<ToolHistoryEntry> = Vec::new();
         let mut iterations = 0;
-        // Track tool calls to include in the response
         let mut tool_call_log: Vec<String> = Vec::new();
+        let mut orchestrator_complete = false;
+        let mut final_summary = String::new();
 
         loop {
             iterations += 1;
-            log::info!("[NATIVE_TOOL_LOOP] Iteration {} starting", iterations);
+            log::info!(
+                "[ORCHESTRATED_LOOP] Iteration {} in {} mode",
+                iterations,
+                orchestrator.current_mode()
+            );
 
             if iterations > MAX_TOOL_ITERATIONS {
-                log::warn!("Native tool loop exceeded max iterations ({})", MAX_TOOL_ITERATIONS);
+                log::warn!("Orchestrated tool loop exceeded max iterations ({})", MAX_TOOL_ITERATIONS);
                 break;
+            }
+
+            // Check for forced mode transition
+            if let Some(transition) = orchestrator.check_forced_transition() {
+                log::info!(
+                    "[ORCHESTRATOR] Forced transition: {} → {} ({})",
+                    transition.from, transition.to, transition.reason
+                );
+                self.broadcaster.broadcast(GatewayEvent::agent_mode_change(
+                    original_message.channel_id,
+                    &transition.to.to_string(),
+                    transition.to.label(),
+                    Some(&transition.reason),
+                ));
+
+                // Update tools for new mode
+                tools = self.tool_registry.get_tool_definitions(tool_config);
+                if let Some(skill_tool) = self.create_skill_tool_definition() {
+                    tools.push(skill_tool);
+                }
+                tools.extend(orchestrator.get_mode_tools());
+
+                // Update system prompt for new mode
+                if let Some(system_msg) = conversation.first_mut() {
+                    if system_msg.role == MessageRole::System {
+                        let orchestrator_prompt = orchestrator.get_system_prompt();
+                        system_msg.content = format!(
+                            "{}\n\n---\n\n{}",
+                            orchestrator_prompt,
+                            archetype.enhance_system_prompt(&messages[0].content, &tools)
+                        );
+                    }
+                }
             }
 
             // Generate with native tool support
@@ -679,15 +812,13 @@ impl MessageDispatcher {
             ).await?;
 
             log::info!(
-                "[NATIVE_TOOL_LOOP] Response - content_len: {}, tool_calls: {}, stop_reason: {:?}",
+                "[ORCHESTRATED_LOOP] Response - content_len: {}, tool_calls: {}",
                 ai_response.content.len(),
-                ai_response.tool_calls.len(),
-                ai_response.stop_reason
+                ai_response.tool_calls.len()
             );
 
-            // Emit x402 payment event and save to database if payment was made
+            // Handle x402 payments
             if let Some(ref payment_info) = ai_response.x402_payment {
-                log::info!("[NATIVE_TOOL_LOOP] x402 payment made: {} {}", payment_info.amount_formatted, payment_info.asset);
                 self.broadcaster.broadcast(GatewayEvent::x402_payment(
                     original_message.channel_id,
                     &payment_info.amount,
@@ -696,10 +827,9 @@ impl MessageDispatcher {
                     &payment_info.pay_to,
                     payment_info.resource.as_deref(),
                 ));
-                // Save payment to database for history tracking
-                if let Err(e) = self.db.record_x402_payment(
+                let _ = self.db.record_x402_payment(
                     Some(original_message.channel_id),
-                    None, // tool_name - this is an AI call, not a tool
+                    None,
                     payment_info.resource.as_deref(),
                     &payment_info.amount,
                     &payment_info.amount_formatted,
@@ -707,28 +837,36 @@ impl MessageDispatcher {
                     &payment_info.pay_to,
                     payment_info.tx_hash.as_deref(),
                     &payment_info.status.to_string(),
-                ) {
-                    log::error!("[NATIVE_TOOL_LOOP] Failed to record x402 payment: {}", e);
-                }
+                );
             }
 
-            // If no tool calls, return the content with tool call log prepended
+            // If no tool calls and orchestrator is complete, return content
             if ai_response.tool_calls.is_empty() {
-                if tool_call_log.is_empty() {
-                    return Ok(ai_response.content);
+                if orchestrator_complete {
+                    let response = if tool_call_log.is_empty() {
+                        format!("{}\n\n{}", final_summary, ai_response.content)
+                    } else {
+                        let tool_log_text = tool_call_log.join("\n");
+                        format!("{}\n\n{}\n\n{}", tool_log_text, final_summary, ai_response.content)
+                    };
+                    return Ok(response);
                 } else {
-                    // Prepend tool call log to the final response
-                    let tool_log_text = tool_call_log.join("\n");
-                    return Ok(format!("{}\n\n{}", tool_log_text, ai_response.content));
+                    // No tool calls but not complete - return content as-is
+                    if tool_call_log.is_empty() {
+                        return Ok(ai_response.content);
+                    } else {
+                        let tool_log_text = tool_call_log.join("\n");
+                        return Ok(format!("{}\n\n{}", tool_log_text, ai_response.content));
+                    }
                 }
             }
 
-            // Log and broadcast each tool call for real-time display in chat
+            // Process tool calls
+            let mut tool_responses = Vec::new();
             for call in &ai_response.tool_calls {
                 let args_pretty = serde_json::to_string_pretty(&call.arguments)
                     .unwrap_or_else(|_| call.arguments.to_string());
 
-                // Log tool call to console for debugging
                 log::info!(
                     "[TOOL_CALL] Agent calling tool '{}' with args:\n{}",
                     call.name,
@@ -740,35 +878,138 @@ impl MessageDispatcher {
                     call.name,
                     args_pretty
                 ));
-                // Emit real-time event for frontend to display immediately
+
                 self.broadcaster.broadcast(GatewayEvent::agent_tool_call(
                     original_message.channel_id,
                     &call.name,
                     &call.arguments,
                 ));
+
+                // Check if this is an orchestrator tool
+                let orchestrator_result = orchestrator.process_tool_result(&call.name, &call.arguments);
+
+                match orchestrator_result {
+                    OrchestratorResult::Transition(transition) => {
+                        log::info!(
+                            "[ORCHESTRATOR] Mode transition: {} → {} ({})",
+                            transition.from, transition.to, transition.reason
+                        );
+                        self.broadcaster.broadcast(GatewayEvent::agent_mode_change(
+                            original_message.channel_id,
+                            &transition.to.to_string(),
+                            transition.to.label(),
+                            Some(&transition.reason),
+                        ));
+
+                        // Update tools for new mode
+                        tools = self.tool_registry.get_tool_definitions(tool_config);
+                        if let Some(skill_tool) = self.create_skill_tool_definition() {
+                            tools.push(skill_tool);
+                        }
+                        tools.extend(orchestrator.get_mode_tools());
+
+                        // Update system prompt
+                        if let Some(system_msg) = conversation.first_mut() {
+                            if system_msg.role == MessageRole::System {
+                                let orchestrator_prompt = orchestrator.get_system_prompt();
+                                system_msg.content = format!(
+                                    "{}\n\n---\n\n{}",
+                                    orchestrator_prompt,
+                                    archetype.enhance_system_prompt(&messages[0].content, &tools)
+                                );
+                            }
+                        }
+
+                        tool_responses.push(ToolResponse::success(
+                            call.id.clone(),
+                            format!("Mode transitioned to {}. {}", transition.to, transition.reason),
+                        ));
+                    }
+                    OrchestratorResult::Complete(summary) => {
+                        log::info!("[ORCHESTRATOR] Execution complete: {}", summary);
+                        orchestrator_complete = true;
+                        final_summary = summary.clone();
+                        tool_responses.push(ToolResponse::success(
+                            call.id.clone(),
+                            format!("Execution complete: {}", summary),
+                        ));
+                    }
+                    OrchestratorResult::ToolResult(result) => {
+                        tool_responses.push(ToolResponse::success(call.id.clone(), result));
+                    }
+                    OrchestratorResult::Error(err) => {
+                        tool_responses.push(ToolResponse::error(call.id.clone(), err));
+                    }
+                    OrchestratorResult::Continue => {
+                        // Not an orchestrator tool, execute normally
+                        let result = if call.name == "use_skill" {
+                            self.execute_skill_tool(&call.arguments).await
+                        } else {
+                            self.tool_registry
+                                .execute(&call.name, call.arguments.clone(), tool_context, Some(tool_config))
+                                .await
+                        };
+
+                        // Handle retry backoff
+                        let result = if let Some(retry_secs) = result.retry_after_secs {
+                            self.broadcaster.broadcast(GatewayEvent::tool_waiting(
+                                original_message.channel_id,
+                                &call.name,
+                                retry_secs,
+                            ));
+                            tokio::time::sleep(std::time::Duration::from_secs(retry_secs)).await;
+                            crate::tools::ToolResult::error(format!(
+                                "{}\n\n🔄 Paused for {} seconds. Please retry.",
+                                result.error.unwrap_or_else(|| "Unknown error".to_string()),
+                                retry_secs
+                            ))
+                        } else {
+                            result
+                        };
+
+                        self.broadcaster.broadcast(GatewayEvent::tool_result(
+                            original_message.channel_id,
+                            &call.name,
+                            result.success,
+                            0,
+                            &result.content,
+                        ));
+
+                        tool_responses.push(if result.success {
+                            ToolResponse::success(call.id.clone(), result.content)
+                        } else {
+                            ToolResponse::error(call.id.clone(), result.content)
+                        });
+                    }
+                }
+
+                // Broadcast task list update after any orchestrator tool processing
+                self.broadcast_tasks_update(original_message.channel_id, orchestrator);
             }
 
-            // Execute tool calls
-            let tool_responses = self.execute_tool_calls(
-                &ai_response.tool_calls,
-                tool_config,
-                tool_context,
-                original_message.channel_id,
-                0,
-                &original_message.user_id,
-            ).await;
-
-            // Add to tool history for next iteration
+            // Add to tool history
             tool_history.push(ToolHistoryEntry::new(
                 ai_response.tool_calls,
                 tool_responses,
             ));
+
+            // If orchestrator is complete, break the loop
+            if orchestrator_complete {
+                break;
+            }
         }
 
-        // If we hit max iterations, return whatever content we have with tool log
-        if tool_call_log.is_empty() {
+        // Save orchestrator context for next turn
+        if let Err(e) = self.db.save_agent_context(session_id, orchestrator.context()) {
+            log::warn!("[MULTI_AGENT] Failed to save context for session {}: {}", session_id, e);
+        }
+
+        // Return final response
+        if orchestrator_complete {
+            Ok(final_summary)
+        } else if tool_call_log.is_empty() {
             Err(format!(
-                "Tool loop hit max iterations ({}) without final response. This may happen with long-running async jobs.",
+                "Tool loop hit max iterations ({}) without completion",
                 MAX_TOOL_ITERATIONS
             ))
         } else {
@@ -781,49 +1022,87 @@ impl MessageDispatcher {
         }
     }
 
-    /// Generate response using text-based JSON tool calling (Llama archetype)
-    async fn generate_with_text_tools(
+    /// Generate response using text-based tool calling with multi-agent orchestration
+    async fn generate_with_text_tools_orchestrated(
         &self,
         client: &AiClient,
         messages: Vec<Message>,
-        tools: Vec<ToolDefinition>,
+        mut tools: Vec<ToolDefinition>,
         tool_config: &ToolConfig,
         tool_context: &ToolContext,
         original_message: &NormalizedMessage,
         archetype: &dyn ModelArchetype,
+        orchestrator: &mut Orchestrator,
+        session_id: i64,
     ) -> Result<String, String> {
-        // Enhance system prompt with tool-calling instructions
+        // Build conversation with orchestrator's system prompt
         let mut conversation = messages.clone();
         if let Some(system_msg) = conversation.first_mut() {
             if system_msg.role == MessageRole::System {
-                system_msg.content = archetype.enhance_system_prompt(&system_msg.content, &tools);
+                let orchestrator_prompt = orchestrator.get_system_prompt();
+                system_msg.content = format!(
+                    "{}\n\n---\n\n{}",
+                    orchestrator_prompt,
+                    archetype.enhance_system_prompt(&system_msg.content, &tools)
+                );
             }
         }
 
         let mut final_response = String::new();
         let mut iterations = 0;
-        // Track tool calls to include in the response
         let mut tool_call_log: Vec<String> = Vec::new();
+        let mut orchestrator_complete = false;
 
         loop {
             iterations += 1;
-            log::info!("[TEXT_TOOL_LOOP] Iteration {} starting", iterations);
+            log::info!(
+                "[TEXT_ORCHESTRATED] Iteration {} in {} mode",
+                iterations,
+                orchestrator.current_mode()
+            );
 
             if iterations > MAX_TOOL_ITERATIONS {
-                log::warn!("Text-based tool loop exceeded max iterations ({})", MAX_TOOL_ITERATIONS);
+                log::warn!("Text orchestrated loop exceeded max iterations ({})", MAX_TOOL_ITERATIONS);
                 break;
             }
 
-            // Generate response (text-only) - with x402 events
+            // Check for forced mode transition
+            if let Some(transition) = orchestrator.check_forced_transition() {
+                self.broadcaster.broadcast(GatewayEvent::agent_mode_change(
+                    original_message.channel_id,
+                    &transition.to.to_string(),
+                    transition.to.label(),
+                    Some(&transition.reason),
+                ));
+
+                // Update tools
+                tools = self.tool_registry.get_tool_definitions(tool_config);
+                if let Some(skill_tool) = self.create_skill_tool_definition() {
+                    tools.push(skill_tool);
+                }
+                tools.extend(orchestrator.get_mode_tools());
+
+                // Update system prompt
+                if let Some(system_msg) = conversation.first_mut() {
+                    if system_msg.role == MessageRole::System {
+                        let orchestrator_prompt = orchestrator.get_system_prompt();
+                        system_msg.content = format!(
+                            "{}\n\n---\n\n{}",
+                            orchestrator_prompt,
+                            archetype.enhance_system_prompt(&messages[0].content, &tools)
+                        );
+                    }
+                }
+            }
+
             let (ai_content, payment) = client.generate_text_with_events(
                 conversation.clone(),
                 &self.broadcaster,
                 original_message.channel_id,
             ).await?;
 
-            // Save x402 payment if one was made
             if let Some(ref payment_info) = payment {
-                if let Err(e) = self.db.record_x402_payment(
+                let _ = self.db.record_x402_payment(
                     Some(original_message.channel_id),
                     None,
                     payment_info.resource.as_deref(),
@@ -833,102 +1112,108 @@ impl MessageDispatcher {
                     &payment_info.pay_to,
                     payment_info.tx_hash.as_deref(),
                     &payment_info.status.to_string(),
-                ) {
-                    log::error!("[TEXT_TOOL_LOOP] Failed to record x402 payment: {}", e);
-                }
+                );
             }
 
-            log::info!("[TEXT_TOOL_LOOP] Raw AI response: {}", ai_content);
-
-            // Parse response using archetype's parser
             let parsed = archetype.parse_response(&ai_content);
 
             match parsed {
                 Some(agent_response) => {
-                    log::info!(
-                        "[TEXT_TOOL_LOOP] Parsed response - body_len: {}, has_tool_call: {}",
-                        agent_response.body.len(),
-                        agent_response.tool_call.is_some()
-                    );
-
-                    // Check if there's a tool call
                     if let Some(tool_call) = agent_response.tool_call {
-                        log::info!(
-                            "[TEXT_TOOL_LOOP] Text-based tool call: {} with params: {}",
-                            tool_call.tool_name,
-                            tool_call.tool_params
-                        );
-
-                        // Log and broadcast tool call for real-time display in chat
                         let args_pretty = serde_json::to_string_pretty(&tool_call.tool_params)
                             .unwrap_or_else(|_| tool_call.tool_params.to_string());
-
-                        // Log tool call to console for debugging
-                        log::info!(
-                            "[TOOL_CALL] Agent calling tool '{}' with args:\n{}",
-                            tool_call.tool_name,
-                            args_pretty
-                        );
 
                         tool_call_log.push(format!(
                             "🔧 **Tool Call:** `{}`\n```json\n{}\n```",
                             tool_call.tool_name,
                             args_pretty
                         ));
-                        // Emit real-time event for frontend to display immediately
+
                         self.broadcaster.broadcast(GatewayEvent::agent_tool_call(
                             original_message.channel_id,
                             &tool_call.tool_name,
                             &tool_call.tool_params,
                         ));
 
-                        // Handle special "use_skill" tool
-                        let tool_result = if tool_call.tool_name == "use_skill" {
-                            self.execute_skill_tool(&tool_call.tool_params).await
-                        } else {
-                            // Execute regular tool
-                            self.tool_registry.execute(
-                                &tool_call.tool_name,
-                                tool_call.tool_params.clone(),
-                                tool_context,
-                                Some(tool_config),
-                            ).await
+                        // Check if orchestrator tool
+                        let orchestrator_result = orchestrator.process_tool_result(
+                            &tool_call.tool_name,
+                            &tool_call.tool_params,
+                        );
+
+                        let tool_result_content = match orchestrator_result {
+                            OrchestratorResult::Transition(transition) => {
+                                self.broadcaster.broadcast(GatewayEvent::agent_mode_change(
+                                    original_message.channel_id,
+                                    &transition.to.to_string(),
+                                    transition.to.label(),
+                                    Some(&transition.reason),
+                                ));
+
+                                // Update tools
+                                tools = self.tool_registry.get_tool_definitions(tool_config);
+                                if let Some(skill_tool) = self.create_skill_tool_definition() {
+                                    tools.push(skill_tool);
+                                }
+                                tools.extend(orchestrator.get_mode_tools());
+
+                                format!("Mode transitioned to {}. {}", transition.to, transition.reason)
+                            }
+                            OrchestratorResult::Complete(summary) => {
+                                orchestrator_complete = true;
+                                final_response = summary.clone();
+                                format!("Execution complete: {}", summary)
+                            }
+                            OrchestratorResult::ToolResult(result) => result,
+                            OrchestratorResult::Error(err) => format!("Error: {}", err),
+                            OrchestratorResult::Continue => {
+                                // Execute regular tool
+                                let result = if tool_call.tool_name == "use_skill" {
+                                    self.execute_skill_tool(&tool_call.tool_params).await
+                                } else {
+                                    self.tool_registry.execute(
+                                        &tool_call.tool_name,
+                                        tool_call.tool_params.clone(),
+                                        tool_context,
+                                        Some(tool_config),
+                                    ).await
+                                };
+
+                                self.broadcaster.broadcast(GatewayEvent::tool_result(
+                                    original_message.channel_id,
+                                    &tool_call.tool_name,
+                                    result.success,
+                                    0,
+                                    &result.content,
+                                ));
+
+                                result.content
+                            }
                         };
 
-                        log::info!("[TEXT_TOOL_LOOP] Tool result success: {}", tool_result.success);
-                        log::debug!("[TEXT_TOOL_LOOP] Tool result content: {}", tool_result.content);
+                        // Broadcast task list update after any orchestrator tool processing
+                        self.broadcast_tasks_update(original_message.channel_id, orchestrator);
 
-                        // Broadcast tool execution event with result content
-                        let _ = self.broadcaster.broadcast(GatewayEvent::tool_result(
-                            original_message.channel_id,
-                            &tool_call.tool_name,
-                            tool_result.success,
-                            0, // duration_ms - not tracked for text-based tool calls
-                            &tool_result.content,
-                        ));
-
-                        // Add the assistant's response and tool result to conversation
+                        // Add to conversation
                         conversation.push(Message {
                             role: MessageRole::Assistant,
                             content: ai_content.clone(),
                         });
-
-                        // Add tool result as user message for next iteration
-                        let followup_prompt = archetype.format_tool_followup(
-                            &tool_call.tool_name,
-                            &tool_result.content,
-                            tool_result.success,
-                        );
                         conversation.push(Message {
                             role: MessageRole::User,
-                            content: followup_prompt,
+                            content: archetype.format_tool_followup(
+                                &tool_call.tool_name,
+                                &tool_result_content,
+                                true,
+                            ),
                         });
 
-                        // Continue loop to get final response
+                        if orchestrator_complete {
+                            break;
+                        }
                         continue;
                     } else {
-                        // No tool call, this is the final response
-                        // Prepend tool call log if any tools were called
+                        // No tool call
                         if tool_call_log.is_empty() {
                             final_response = agent_response.body;
                         } else {
@@ -939,8 +1224,6 @@ impl MessageDispatcher {
                     }
                 }
                 None => {
-                    // Couldn't parse as structured response, return raw content
-                    log::warn!("[TEXT_TOOL_LOOP] Could not parse response, returning raw content");
                     if tool_call_log.is_empty() {
                         final_response = ai_content;
                     } else {
@@ -950,6 +1233,11 @@ impl MessageDispatcher {
                     break;
                 }
             }
+        }
+
+        // Save orchestrator context for next turn
+        if let Err(e) = self.db.save_agent_context(session_id, orchestrator.context()) {
+            log::warn!("[MULTI_AGENT] Failed to save context for session {}: {}", session_id, e);
         }
 
         if final_response.is_empty() {
@@ -1054,6 +1342,34 @@ impl MessageDispatcher {
                 self.tool_registry
                     .execute(&call.name, call.arguments.clone(), tool_context, Some(tool_config))
                     .await
+            };
+
+            // Handle exponential backoff for retryable errors
+            let result = if let Some(retry_secs) = result.retry_after_secs {
+                log::info!(
+                    "[TOOL_RETRY] Tool '{}' returned retryable error, pausing for {}s before continuing",
+                    call.name,
+                    retry_secs
+                );
+
+                // Emit a waiting event so the UI can show the delay
+                self.broadcaster.broadcast(GatewayEvent::tool_waiting(
+                    channel_id,
+                    &call.name,
+                    retry_secs,
+                ));
+
+                // Pause for the backoff duration
+                tokio::time::sleep(std::time::Duration::from_secs(retry_secs)).await;
+
+                // Return a modified result that instructs the agent to retry
+                crate::tools::ToolResult::error(format!(
+                    "{}\n\n🔄 The system paused for {} seconds. Please retry the same tool call now - the temporary error may have resolved.",
+                    result.error.unwrap_or_else(|| "Unknown error".to_string()),
+                    retry_secs
+                ))
+            } else {
+                result
             };
 
             let duration_ms = start.elapsed().as_millis() as i64;
