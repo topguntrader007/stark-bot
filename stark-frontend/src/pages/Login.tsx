@@ -1,7 +1,7 @@
-import { useState, useMemo } from 'react';
+import { useState, useMemo, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { BrowserProvider } from 'ethers';
-import { generateChallenge, validateAuth } from '@/lib/api';
+import { generateChallenge, validateAuth, getConfigStatus, ConfigStatus } from '@/lib/api';
 import Button from '@/components/ui/Button';
 import Card, { CardContent } from '@/components/ui/Card';
 
@@ -37,7 +37,15 @@ export default function Login() {
   const [error, setError] = useState('');
   const [state, setState] = useState<LoginState>('idle');
   const [connectedAddress, setConnectedAddress] = useState<string | null>(null);
+  const [configStatus, setConfigStatus] = useState<ConfigStatus | null>(null);
   const navigate = useNavigate();
+
+  // Fetch config status on mount to show appropriate warnings
+  useEffect(() => {
+    getConfigStatus()
+      .then(setConfigStatus)
+      .catch((err) => console.error('Failed to fetch config status:', err));
+  }, []);
 
   const showMobileWalletOptions = useMemo(() => {
     return isMobile() && !hasWalletProvider();
@@ -173,6 +181,19 @@ export default function Login() {
                     </svg>
                     <span>{getStateMessage()}</span>
                   </div>
+                </div>
+              )}
+
+              {/* Configuration warnings */}
+              {configStatus && !configStatus.login_configured && (
+                <div className="bg-red-500/20 border border-red-500/50 text-red-400 px-4 py-3 rounded-lg text-sm">
+                  Login is not configured. Set BURNER_WALLET_BOT_PRIVATE_KEY environment variable and rebuild the instance.
+                </div>
+              )}
+
+              {configStatus && configStatus.login_configured && !configStatus.burner_wallet_configured && (
+                <div className="bg-amber-500/20 border border-amber-500/50 text-amber-400 px-4 py-3 rounded-lg text-sm">
+                  BURNER_WALLET_BOT_PRIVATE_KEY is not configured. Web3 transaction tools will not work.
                 </div>
               )}
 

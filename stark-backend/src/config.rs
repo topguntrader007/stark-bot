@@ -1,3 +1,5 @@
+use ethers::core::k256::ecdsa::SigningKey;
+use ethers::signers::{LocalWallet, Signer};
 use std::env;
 use std::path::{Path, PathBuf};
 
@@ -56,9 +58,22 @@ pub fn burner_wallet_private_key() -> Option<String> {
     env::var(env_vars::BURNER_WALLET_PRIVATE_KEY).ok()
 }
 
+/// Derive the public address from a private key
+fn derive_address_from_private_key(private_key: &str) -> Result<String, String> {
+    let key_hex = private_key.strip_prefix("0x").unwrap_or(private_key);
+    let key_bytes = hex::decode(key_hex)
+        .map_err(|e| format!("Invalid private key hex: {}", e))?;
+
+    let signing_key = SigningKey::from_bytes(key_bytes.as_slice().into())
+        .map_err(|e| format!("Invalid private key: {}", e))?;
+
+    let wallet = LocalWallet::from(signing_key);
+    Ok(format!("{:?}", wallet.address()).to_lowercase())
+}
+
 #[derive(Clone)]
 pub struct Config {
-    pub login_admin_public_address: String,
+    pub login_admin_public_address: Option<String>,
     pub burner_wallet_private_key: Option<String>,
     pub port: u16,
     pub database_url: String,
@@ -66,10 +81,22 @@ pub struct Config {
 
 impl Config {
     pub fn from_env() -> Self {
+        let burner_wallet_private_key = env::var(env_vars::BURNER_WALLET_PRIVATE_KEY).ok();
+
+        // Try to get public address from env, or derive from private key (no panic if both missing)
+        let login_admin_public_address = env::var(env_vars::LOGIN_ADMIN_PUBLIC_ADDRESS)
+            .ok()
+            .or_else(|| {
+                burner_wallet_private_key.as_ref().and_then(|pk| {
+                    derive_address_from_private_key(pk)
+                        .map_err(|e| log::warn!("Failed to derive address from private key: {}", e))
+                        .ok()
+                })
+            });
+
         Self {
-            login_admin_public_address: env::var(env_vars::LOGIN_ADMIN_PUBLIC_ADDRESS)
-                .expect("LOGIN_ADMIN_PUBLIC_ADDRESS must be set"),
-            burner_wallet_private_key: env::var(env_vars::BURNER_WALLET_PRIVATE_KEY).ok(),
+            login_admin_public_address,
+            burner_wallet_private_key,
             port: env::var(env_vars::PORT)
                 .unwrap_or_else(|_| defaults::PORT.to_string())
                 .parse()

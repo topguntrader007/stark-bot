@@ -245,7 +245,7 @@ async fn main() -> std::io::Result<()> {
             .app_data(web::Data::new(Arc::clone(&tx_q)))
             .wrap(Logger::default())
             .wrap(cors)
-            .configure(controllers::health::config)
+            .configure(controllers::health::config_routes)
             .configure(controllers::auth::config)
             .configure(controllers::dashboard::config)
             .configure(controllers::chat::config)

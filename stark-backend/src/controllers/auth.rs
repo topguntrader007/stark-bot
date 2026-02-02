@@ -137,8 +137,20 @@ async fn validate_auth(
         });
     }
 
+    // Check that login is configured
+    let admin_address = match &state.config.login_admin_public_address {
+        Some(addr) => addr.to_lowercase(),
+        None => {
+            return HttpResponse::ServiceUnavailable().json(LoginResponse {
+                success: false,
+                token: None,
+                expires_at: None,
+                error: Some("Login not configured. Set LOGIN_ADMIN_PUBLIC_ADDRESS or BURNER_WALLET_BOT_PRIVATE_KEY environment variable.".to_string()),
+            });
+        }
+    };
+
     // Check that this address is the admin address
-    let admin_address = state.config.login_admin_public_address.to_lowercase();
     if public_address != admin_address {
         return HttpResponse::Unauthorized().json(LoginResponse {
             success: false,

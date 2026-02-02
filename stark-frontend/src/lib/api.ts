@@ -1,5 +1,17 @@
 const API_BASE = '/api';
 
+// Config Status API (unauthenticated)
+export interface ConfigStatus {
+  login_configured: boolean;
+  burner_wallet_configured: boolean;
+}
+
+export async function getConfigStatus(): Promise<ConfigStatus> {
+  const response = await fetch(`${API_BASE}/health/config`);
+  if (!response.ok) throw new Error('Failed to fetch config status');
+  return response.json();
+}
+
 export async function apiFetch<T>(
   endpoint: string,
   options: RequestInit = {}
