@@ -18,6 +18,8 @@ pub struct BotSettings {
     pub custom_rpc_endpoints: Option<HashMap<String, String>>,
     /// Maximum number of tool execution iterations per request
     pub max_tool_iterations: i32,
+    /// Rogue mode: when true, bot operates in "rogue" mode instead of "partner" mode
+    pub rogue_mode_enabled: bool,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }
@@ -32,6 +34,7 @@ impl Default for BotSettings {
             rpc_provider: "defirelay".to_string(),
             custom_rpc_endpoints: None,
             max_tool_iterations: DEFAULT_MAX_TOOL_ITERATIONS,
+            rogue_mode_enabled: false,
             created_at: Utc::now(),
             updated_at: Utc::now(),
         }
@@ -47,4 +50,5 @@ pub struct UpdateBotSettingsRequest {
     pub rpc_provider: Option<String>,
     pub custom_rpc_endpoints: Option<HashMap<String, String>>,
     pub max_tool_iterations: Option<i32>,
+    pub rogue_mode_enabled: Option<bool>,
 }

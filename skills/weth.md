@@ -88,3 +88,35 @@ The `wallet_address` register is intrinsic - no need to set it first.
 - WETH is a 1:1 wrapped version of ETH as an ERC20
 - Wrapping/unwrapping is instant and costs only gas
 - Some DEX swaps automatically wrap ETH, but direct WETH control is sometimes needed
+
+---
+
+## Transaction Queue Note
+
+When using `web3_function_call` with presets like `weth_deposit` or `weth_withdraw`, the transaction is executed directly (not queued).
+
+If you need to review transactions before broadcast, use the register pattern with `web3_tx` instead:
+
+```tool:register_set
+key: weth_tx
+json_value:
+  to: "0x4200000000000000000000000000000000000006"
+  value: "1000000000000000"
+  data: "0xd0e30db0"
+  gas: "50000"
+```
+
+```tool:web3_tx
+from_register: weth_tx
+max_fee_per_gas: "<GAS_PRICE>"
+network: base
+```
+
+Then verify and broadcast:
+```tool:list_queued_web3_tx
+status: pending
+```
+
+```tool:broadcast_web3_tx
+uuid: <UUID>
+```

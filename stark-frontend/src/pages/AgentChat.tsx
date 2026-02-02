@@ -1,11 +1,10 @@
 import { useState, useEffect, useRef, useCallback, KeyboardEvent } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Send, RotateCcw, Copy, Check, Wallet, Bug, Square, Loader2, ChevronDown } from 'lucide-react';
+import { Send, RotateCcw, Copy, Check, Wallet, Bug, Square, Loader2, ChevronDown, CheckCircle, Circle } from 'lucide-react';
 import Button from '@/components/ui/Button';
 import ChatMessage from '@/components/chat/ChatMessage';
 import TypingIndicator from '@/components/chat/TypingIndicator';
 import ExecutionProgress from '@/components/chat/ExecutionProgress';
-import TaskQueueProgress from '@/components/chat/TaskQueueProgress';
 import DebugPanel from '@/components/chat/DebugPanel';
 import CommandAutocomplete from '@/components/chat/CommandAutocomplete';
 import CommandMenu from '@/components/chat/CommandMenu';
@@ -17,7 +16,7 @@ import { useGateway } from '@/hooks/useGateway';
 import { useWallet } from '@/hooks/useWallet';
 import { sendChatMessage, getAgentSettings, getSkills, getTools, confirmTransaction, cancelTransaction, stopExecution, listSubagents, getActiveWebSession, getSessionTranscript, getExecutionStatus, createNewWebSession } from '@/lib/api';
 import { Command, COMMAND_DEFINITIONS, getAllCommands } from '@/lib/commands';
-import type { ChatMessage as ChatMessageType, MessageRole, SlashCommand, TrackedTransaction, TxPendingEvent, TxConfirmedEvent, PendingConfirmation, ConfirmationRequiredEvent } from '@/types';
+import type { ChatMessage as ChatMessageType, MessageRole, SlashCommand, TrackedTransaction, TxPendingEvent, TxConfirmedEvent, PendingConfirmation, ConfirmationRequiredEvent, PlannerTask, TaskQueueUpdateEvent, TaskStatusChangeEvent } from '@/types';
 
 interface ConversationMessage {
   role: string;
@@ -90,6 +89,7 @@ export default function AgentChat() {
   const [trackedTxs, setTrackedTxs] = useState<TrackedTransaction[]>([]);
   const [pendingConfirmation, setPendingConfirmation] = useState<PendingConfirmation | null>(null);
   const [subagents, setSubagents] = useState<Subagent[]>([]);
+  const [plannerTasks, setPlannerTasks] = useState<PlannerTask[]>([]);
   const [cronExecutionActive, setCronExecutionActive] = useState<{
     job_id: string;
     job_name: string;
@@ -692,6 +692,53 @@ export default function AgentChat() {
       off('subagent.spawned', handleSubagentSpawned);
       off('subagent.completed', handleSubagentCompleted);
       off('subagent.failed', handleSubagentFailed);
+    };
+  }, [on, off]);
+
+  // Listen for planner task events (for inline task display)
+  useEffect(() => {
+    const handleTaskQueueUpdate = (data: unknown) => {
+      if (!isWebChannelEvent(data)) return;
+      const event = data as TaskQueueUpdateEvent;
+      console.log('[PlannerTasks] Queue update:', event);
+      setPlannerTasks(event.tasks || []);
+    };
+
+    const handleTaskStatusChange = (data: unknown) => {
+      if (!isWebChannelEvent(data)) return;
+      const event = data as TaskStatusChangeEvent;
+      console.log('[PlannerTasks] Status change:', event);
+      setPlannerTasks((prev) =>
+        prev.map((task) =>
+          task.id === event.task_id
+            ? { ...task, status: event.status, description: event.description }
+            : task
+        )
+      );
+    };
+
+    const handleSessionComplete = (data: unknown) => {
+      if (!isWebChannelEvent(data)) return;
+      console.log('[PlannerTasks] Session complete, clearing tasks');
+      setTimeout(() => setPlannerTasks([]), 3000);
+    };
+
+    const handleExecutionStopped = (data: unknown) => {
+      if (!isWebChannelEvent(data)) return;
+      console.log('[PlannerTasks] Execution stopped, clearing tasks');
+      setPlannerTasks([]);
+    };
+
+    on('task.queue_update', handleTaskQueueUpdate);
+    on('task.status_change', handleTaskStatusChange);
+    on('session.complete', handleSessionComplete);
+    on('execution.stopped', handleExecutionStopped);
+
+    return () => {
+      off('task.queue_update', handleTaskQueueUpdate);
+      off('task.status_change', handleTaskStatusChange);
+      off('session.complete', handleSessionComplete);
+      off('execution.stopped', handleExecutionStopped);
     };
   }, [on, off]);
 
@@ -1352,9 +1399,6 @@ export default function AgentChat() {
       {/* Debug Panel - always mounted to capture events, hidden when not in debug mode */}
       <DebugPanel className={`mx-6 mb-4 ${debugMode ? '' : 'hidden'}`} />
 
-      {/* Task Queue Progress (Task Planner) */}
-      <TaskQueueProgress className="mx-6 mb-4" />
-
       {/* Execution Progress */}
       <ExecutionProgress className="mx-6 mb-4" />
 
@@ -1393,7 +1437,7 @@ export default function AgentChat() {
       {/* Input */}
       <div className="px-6 pb-6">
         <div className="relative">
-          {showAutocomplete && (
+          {showAutocomplete && !isLoading && (
             <CommandAutocomplete
               commands={slashCommands}
               filter={input}
@@ -1402,27 +1446,105 @@ export default function AgentChat() {
               onClose={() => setShowAutocomplete(false)}
             />
           )}
-          <div className="flex gap-3">
+          <div className="flex gap-2 sm:gap-3">
             <div className="flex-1 relative">
-              <textarea
-                ref={inputRef}
-                value={input}
-                onChange={(e) => handleInputChange(e.target.value)}
-                onKeyDown={handleKeyDown}
-                placeholder="Type a message or /command..."
-                rows={1}
-                className="w-full px-4 py-3 bg-slate-800 border border-slate-700 rounded-lg text-white placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-stark-500 focus:border-transparent resize-none"
-                style={{ minHeight: '48px', maxHeight: '200px' }}
-              />
+              {isLoading ? (
+                /* Inline Task List when running */
+                <div
+                  className="w-full h-full px-3 sm:px-4 py-3 bg-slate-800 border border-slate-700 rounded-lg overflow-y-auto"
+                  style={{ minHeight: '104px', maxHeight: '200px' }}
+                >
+                  {plannerTasks.length > 0 ? (
+                    <div className="space-y-1.5">
+                      {plannerTasks.map((task) => (
+                        <div
+                          key={task.id}
+                          className={`flex items-start gap-2 text-sm py-1 px-2 rounded ${
+                            task.status === 'in_progress' ? 'bg-cyan-500/10 border border-cyan-500/30' :
+                            task.status === 'completed' ? 'opacity-60' : ''
+                          }`}
+                        >
+                          <div className="shrink-0 mt-0.5">
+                            {task.status === 'completed' ? (
+                              <CheckCircle className="w-4 h-4 text-green-400" />
+                            ) : task.status === 'in_progress' ? (
+                              <Loader2 className="w-4 h-4 text-cyan-400 animate-spin" />
+                            ) : (
+                              <Circle className="w-4 h-4 text-slate-500" />
+                            )}
+                          </div>
+                          <span
+                            className={`flex-1 ${
+                              task.status === 'in_progress' ? 'text-cyan-300 font-medium' :
+                              task.status === 'completed' ? 'text-slate-400 line-through' :
+                              'text-slate-300'
+                            }`}
+                          >
+                            {task.description}
+                          </span>
+                        </div>
+                      ))}
+                    </div>
+                  ) : (
+                    <div className="flex items-center justify-center h-full text-slate-500 text-sm">
+                      <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                      Processing...
+                    </div>
+                  )}
+                </div>
+              ) : (
+                /* Normal textarea when idle */
+                <textarea
+                  ref={inputRef}
+                  value={input}
+                  onChange={(e) => handleInputChange(e.target.value)}
+                  onKeyDown={handleKeyDown}
+                  placeholder="Type a message or /command..."
+                  rows={1}
+                  className="w-full h-full px-3 sm:px-4 py-3 bg-slate-800 border border-slate-700 rounded-lg text-sm sm:text-base text-white placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-stark-500 focus:border-transparent resize-none"
+                  style={{ minHeight: '104px', maxHeight: '200px' }}
+                />
+              )}
             </div>
-            <CommandMenu onCommandSelect={handleMenuCommand} />
-            <Button
-              onClick={handleSend}
-              disabled={!input.trim() || isLoading}
-              className="shrink-0"
-            >
-              <Send className="w-5 h-5" />
-            </Button>
+            <div className="flex flex-col sm:flex-row gap-2 sm:gap-3">
+              <CommandMenu onCommandSelect={handleMenuCommand} />
+              {isLoading ? (
+                /* Stop button when running */
+                <button
+                  onClick={async () => {
+                    setIsStopping(true);
+                    try {
+                      const result = await stopExecution();
+                      if (result.success) {
+                        addMessage('system', result.message || 'Stopping execution...');
+                      } else {
+                        setIsStopping(false);
+                      }
+                    } catch (error) {
+                      console.error('Failed to stop execution:', error);
+                      setIsStopping(false);
+                    }
+                  }}
+                  disabled={isStopping}
+                  className="w-12 h-12 flex items-center justify-center rounded-lg bg-red-600 hover:bg-red-500 text-white transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  {isStopping ? (
+                    <Loader2 className="w-5 h-5 animate-spin" />
+                  ) : (
+                    <Square className="w-5 h-5" />
+                  )}
+                </button>
+              ) : (
+                /* Send button when idle */
+                <button
+                  onClick={handleSend}
+                  disabled={!input.trim()}
+                  className="w-12 h-12 flex items-center justify-center rounded-lg bg-gradient-to-r from-stark-500 to-stark-600 hover:from-stark-400 hover:to-stark-500 text-white transition-all disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  <Send className="w-5 h-5" />
+                </button>
+              )}
+            </div>
           </div>
         </div>
       </div>

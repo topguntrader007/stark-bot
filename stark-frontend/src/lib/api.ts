@@ -686,6 +686,34 @@ export async function deleteApiKey(keyName: string): Promise<void> {
   });
 }
 
+// Cloud Backup API
+export interface BackupResponse {
+  success: boolean;
+  key_count: number;
+  message?: string;
+  error?: string;
+}
+
+export async function backupKeysToCloud(): Promise<BackupResponse> {
+  const response = await apiFetch<BackupResponse>('/keys/backup', {
+    method: 'POST',
+  });
+  if (!response.success) {
+    throw new Error(response.error || 'Failed to backup keys');
+  }
+  return response;
+}
+
+export async function restoreKeysFromCloud(): Promise<BackupResponse> {
+  const response = await apiFetch<BackupResponse>('/keys/restore', {
+    method: 'POST',
+  });
+  if (!response.success) {
+    throw new Error(response.error || 'Failed to restore keys');
+  }
+  return response;
+}
+
 // Cron Jobs API
 export interface CronJobInfo {
   id: number;
@@ -893,6 +921,7 @@ export interface BotSettings {
   rpc_provider: string;
   custom_rpc_endpoints?: Record<string, string>;
   max_tool_iterations: number;
+  rogue_mode_enabled: boolean;
   created_at: string;
   updated_at: string;
 }
@@ -908,6 +937,7 @@ export async function updateBotSettings(data: {
   rpc_provider?: string;
   custom_rpc_endpoints?: Record<string, string>;
   max_tool_iterations?: number;
+  rogue_mode_enabled?: boolean;
 }): Promise<BotSettings> {
   return apiFetch('/bot-settings', {
     method: 'PUT',

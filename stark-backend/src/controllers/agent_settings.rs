@@ -248,6 +248,7 @@ pub async fn update_bot_settings(
         request.rpc_provider.as_deref(),
         request.custom_rpc_endpoints.as_ref(),
         request.max_tool_iterations,
+        request.rogue_mode_enabled,
     ) {
         Ok(settings) => {
             log::info!(

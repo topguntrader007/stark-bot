@@ -73,7 +73,7 @@ export default function Login() {
       }
 
       // Request account access
-      const provider = new BrowserProvider(window.ethereum);
+      const provider = new BrowserProvider(window.ethereum!);
       const accounts = await provider.send('eth_requestAccounts', []);
 
       if (!accounts || accounts.length === 0) {

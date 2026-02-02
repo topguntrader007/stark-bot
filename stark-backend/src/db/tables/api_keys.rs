@@ -102,4 +102,22 @@ impl Database {
         )?;
         Ok(rows_affected > 0)
     }
+
+    /// List all API keys with their full values (for export/backup)
+    pub fn list_api_keys_with_values(&self) -> SqliteResult<Vec<(String, String)>> {
+        let conn = self.conn.lock().unwrap();
+
+        let mut stmt = conn.prepare(
+            "SELECT service_name, api_key FROM external_api_keys ORDER BY service_name",
+        )?;
+
+        let keys = stmt
+            .query_map([], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+            })?
+            .filter_map(|r| r.ok())
+            .collect();
+
+        Ok(keys)
+    }
 }

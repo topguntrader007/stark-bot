@@ -2,11 +2,45 @@
 //!
 //! Provides REST API access to the transaction queue for the frontend.
 
-use actix_web::{web, HttpResponse, Responder};
+use actix_web::{web, HttpRequest, HttpResponse, Responder};
 use serde::{Deserialize, Serialize};
 
 use crate::AppState;
 use crate::tx_queue::{QueuedTxStatus, QueuedTxSummary};
+
+/// Validate session token from request
+fn validate_session(state: &web::Data<AppState>, req: &HttpRequest) -> Result<(), HttpResponse> {
+    let token = req
+        .headers()
+        .get("Authorization")
+        .and_then(|h| h.to_str().ok())
+        .map(|s| s.trim_start_matches("Bearer ").to_string());
+
+    let token = match token {
+        Some(t) => t,
+        None => {
+            return Err(HttpResponse::Unauthorized().json(serde_json::json!({
+                "success": false,
+                "error": "No authorization token provided"
+            })));
+        }
+    };
+
+    match state.db.validate_session(&token) {
+        Ok(Some(_)) => Ok(()),
+        Ok(None) => Err(HttpResponse::Unauthorized().json(serde_json::json!({
+            "success": false,
+            "error": "Invalid or expired session"
+        }))),
+        Err(e) => {
+            log::error!("Failed to validate session: {}", e);
+            Err(HttpResponse::InternalServerError().json(serde_json::json!({
+                "success": false,
+                "error": "Internal server error"
+            })))
+        }
+    }
+}
 
 pub fn config(cfg: &mut web::ServiceConfig) {
     cfg.service(
@@ -47,8 +81,13 @@ pub struct TransactionResponse {
 /// List all transactions with optional filters
 async fn list_transactions(
     state: web::Data<AppState>,
+    req: HttpRequest,
     query: web::Query<ListParams>,
 ) -> impl Responder {
+    if let Err(resp) = validate_session(&state, &req) {
+        return resp;
+    }
+
     let tx_queue = &state.tx_queue;
     let limit = query.limit.unwrap_or(50).min(100);
 
@@ -92,7 +131,11 @@ async fn list_transactions(
 }
 
 /// List only pending transactions
-async fn list_pending(state: web::Data<AppState>) -> impl Responder {
+async fn list_pending(state: web::Data<AppState>, req: HttpRequest) -> impl Responder {
+    if let Err(resp) = validate_session(&state, &req) {
+        return resp;
+    }
+
     let tx_queue = &state.tx_queue;
 
     let transactions = tx_queue.list_pending();
@@ -115,8 +158,13 @@ async fn list_pending(state: web::Data<AppState>) -> impl Responder {
 /// Get a specific transaction by UUID
 async fn get_transaction(
     state: web::Data<AppState>,
+    req: HttpRequest,
     path: web::Path<String>,
 ) -> impl Responder {
+    if let Err(resp) = validate_session(&state, &req) {
+        return resp;
+    }
+
     let uuid = path.into_inner();
     let tx_queue = &state.tx_queue;
 

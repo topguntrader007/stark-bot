@@ -54,12 +54,25 @@ json_value:
   gas: "21000"
 ```
 
-### Step 3: Execute Transfer
+### Step 3: Queue Transfer
 
 ```tool:web3_tx
 from_register: transfer_tx
 max_fee_per_gas: "<GAS_PRICE>"
 network: base
+```
+
+### Step 4: Verify and Broadcast
+
+Verify the queued transaction:
+```tool:list_queued_web3_tx
+status: pending
+limit: 1
+```
+
+Broadcast when ready:
+```tool:broadcast_web3_tx
+uuid: <UUID_FROM_PREVIOUS_STEP>
 ```
 
 ---
@@ -85,12 +98,23 @@ json_value:
   gas: "21000"
 ```
 
-### 3. Execute
+### 3. Queue Transfer
 
 ```tool:web3_tx
 from_register: transfer_tx
 max_fee_per_gas: "0xf4240"
 network: base
+```
+
+### 4. Verify and Broadcast
+
+```tool:list_queued_web3_tx
+status: pending
+limit: 1
+```
+
+```tool:broadcast_web3_tx
+uuid: <UUID_FROM_PREVIOUS_STEP>
 ```
 
 ---

@@ -1,9 +1,9 @@
 import { useState, useEffect, FormEvent } from 'react';
-import { Key, Trash2, Plus, ExternalLink, Check, X } from 'lucide-react';
+import { Key, Trash2, Plus, ExternalLink, Check, X, Cloud, Upload, Download, Shield, AlertCircle, CheckCircle } from 'lucide-react';
 import Card, { CardContent, CardHeader, CardTitle } from '@/components/ui/Card';
 import Button from '@/components/ui/Button';
 import Input from '@/components/ui/Input';
-import { getApiKeys, upsertApiKey, deleteApiKey, getServiceConfigs, ApiKey, ServiceConfig } from '@/lib/api';
+import { getApiKeys, upsertApiKey, deleteApiKey, getServiceConfigs, ApiKey, ServiceConfig, backupKeysToCloud, restoreKeysFromCloud } from '@/lib/api';
 
 export default function ApiKeys() {
   const [keys, setKeys] = useState<ApiKey[]>([]);
@@ -12,6 +12,11 @@ export default function ApiKeys() {
   const [savingKeys, setSavingKeys] = useState<Set<string>>(new Set());
   const [keyInputs, setKeyInputs] = useState<Record<string, string>>({});
   const [message, setMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
+
+  // Cloud backup state
+  const [isUploading, setIsUploading] = useState(false);
+  const [isDownloading, setIsDownloading] = useState(false);
+  const [backupMessage, setBackupMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
 
   useEffect(() => {
     loadData();
@@ -142,6 +147,50 @@ export default function ApiKeys() {
     setKeyInputs(prev => ({ ...prev, [keyName]: value }));
   };
 
+  // Cloud backup handlers
+  const formatKeystoreError = (err: unknown): string => {
+    const message = err instanceof Error ? err.message : 'Unknown error';
+    // Check for keystore connection errors
+    if (message.includes('keystore') || message.includes('connect') || message.includes('BadGateway')) {
+      return 'Keystore server is unreachable. Please try again later.';
+    }
+    return message;
+  };
+
+  const handleUploadBackup = async () => {
+    if (keys.length === 0) {
+      setBackupMessage({ type: 'error', text: 'No API keys to backup' });
+      return;
+    }
+
+    setIsUploading(true);
+    setBackupMessage(null);
+
+    try {
+      const result = await backupKeysToCloud();
+      setBackupMessage({ type: 'success', text: `Backed up ${result.key_count} keys to cloud` });
+    } catch (err) {
+      setBackupMessage({ type: 'error', text: formatKeystoreError(err) });
+    } finally {
+      setIsUploading(false);
+    }
+  };
+
+  const handleDownloadBackup = async () => {
+    setIsDownloading(true);
+    setBackupMessage(null);
+
+    try {
+      const result = await restoreKeysFromCloud();
+      await loadKeys();
+      setBackupMessage({ type: 'success', text: `Restored ${result.key_count} keys from backup` });
+    } catch (err) {
+      setBackupMessage({ type: 'error', text: formatKeystoreError(err) });
+    } finally {
+      setIsDownloading(false);
+    }
+  };
+
   if (isLoading) {
     return (
       <div className="p-8 flex items-center justify-center">
@@ -174,11 +223,140 @@ export default function ApiKeys() {
         </div>
       )}
 
-      <div className="flex flex-col-reverse lg:flex-row gap-6">
-        {/* Left column: Service Groups and Info */}
-        <div className="flex-1 max-w-2xl space-y-6">
-          {/* Service Groups */}
-          {serviceConfigs.map((config) => (
+      {/* Configuration Summary and Cloud Backup Row */}
+      <div className="mb-6 flex flex-col lg:flex-row gap-6">
+        {/* Installed Keys */}
+        <div className="flex-1">
+          <Card className="h-full">
+            <CardHeader>
+              <CardTitle>Installed Keys</CardTitle>
+            </CardHeader>
+            <CardContent>
+              {keys.length === 0 ? (
+                <div className="text-center py-8 text-slate-500">
+                  <Key className="w-12 h-12 mx-auto mb-3 opacity-50" />
+                  <p>No API keys configured yet.</p>
+                  <p className="text-sm mt-1">Add keys below to get started.</p>
+                </div>
+              ) : (
+                <div className="flex flex-wrap gap-4">
+                  {serviceConfigs.map((config) => {
+                    const configuredKeys = config.keys.filter(k => isKeyConfigured(k.name));
+                    if (configuredKeys.length === 0) return null;
+
+                    return (
+                      <div key={config.group} className="p-4 bg-slate-900/50 rounded-lg border border-slate-700 flex-1 min-w-[250px]">
+                        <div className="flex items-center justify-between mb-2">
+                          <p className="font-medium text-white">{config.label}</p>
+                          {isGroupComplete(config) ? (
+                            <span className="flex items-center gap-1 text-xs text-green-400">
+                              <Check className="w-3 h-3" />
+                              Complete
+                            </span>
+                          ) : (
+                            <span className="flex items-center gap-1 text-xs text-yellow-400">
+                              <X className="w-3 h-3" />
+                              Partial
+                            </span>
+                          )}
+                        </div>
+                        <div className="text-sm text-slate-400 space-y-1">
+                          {config.keys.map((keyConfig) => {
+                            const configuredKey = getConfiguredKey(keyConfig.name);
+                            return (
+                              <p key={keyConfig.name} className="flex items-center gap-2">
+                                {configuredKey ? (
+                                  <Check className="w-3 h-3 text-green-400" />
+                                ) : (
+                                  <X className="w-3 h-3 text-slate-600" />
+                                )}
+                                <span className={configuredKey ? 'text-slate-300' : 'text-slate-600'}>
+                                  {keyConfig.label}
+                                </span>
+                                {configuredKey && (
+                                  <span className="font-mono text-slate-500">
+                                    {configuredKey.key_preview}
+                                  </span>
+                                )}
+                              </p>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </CardContent>
+          </Card>
+        </div>
+
+        {/* Encrypted Cloud Backup */}
+        <div className="lg:w-80 lg:flex-shrink-0">
+          <Card className="h-full border-stark-500/30">
+            <CardHeader>
+              <div className="flex items-center gap-2">
+                <Cloud className="w-5 h-5 text-stark-400" />
+                <CardTitle>Encrypted Cloud Backup</CardTitle>
+              </div>
+            </CardHeader>
+            <CardContent>
+              <div className="flex items-start gap-2 mb-4 p-2 bg-stark-500/10 rounded-lg">
+                <Shield className="w-4 h-4 text-stark-400 mt-0.5 flex-shrink-0" />
+                <p className="text-xs text-slate-400">
+                  Encrypted with your burner wallet key. Only this instance can decrypt the backup.
+                </p>
+              </div>
+
+              {backupMessage && (
+                <div
+                  className={`mb-4 px-3 py-2 rounded-lg text-sm flex items-start gap-2 ${
+                    backupMessage.type === 'success'
+                      ? 'bg-green-500/20 border border-green-500/50 text-green-400'
+                      : 'bg-red-500/20 border border-red-500/50 text-red-400'
+                  }`}
+                >
+                  {backupMessage.type === 'success' ? (
+                    <CheckCircle className="w-4 h-4 flex-shrink-0 mt-0.5" />
+                  ) : (
+                    <AlertCircle className="w-4 h-4 flex-shrink-0 mt-0.5" />
+                  )}
+                  <span>{backupMessage.text}</span>
+                </div>
+              )}
+
+              <div className="space-y-3">
+                <Button
+                  variant="secondary"
+                  size="sm"
+                  onClick={handleUploadBackup}
+                  isLoading={isUploading}
+                  disabled={keys.length === 0}
+                  className="w-full"
+                >
+                  <Upload className="w-4 h-4 mr-2" />
+                  Backup to Cloud
+                </Button>
+                <Button
+                  variant="secondary"
+                  size="sm"
+                  onClick={handleDownloadBackup}
+                  isLoading={isDownloading}
+                  className="w-full"
+                >
+                  <Download className="w-4 h-4 mr-2" />
+                  Restore from Cloud
+                </Button>
+              </div>
+            </CardContent>
+          </Card>
+        </div>
+      </div>
+
+      {/* Service Groups and Info */}
+      <div className="max-w-2xl space-y-6">
+        {/* Service Groups */}
+        {serviceConfigs.map((config) => (
             <Card key={config.group}>
               <CardHeader>
                 <div className="flex items-center justify-between">
@@ -304,73 +482,6 @@ export default function ApiKeys() {
             </CardContent>
           </Card>
         </div>
-
-        {/* Right column (on large screens) / Top (on small screens): Configuration Summary */}
-        <div className="lg:w-80 lg:flex-shrink-0">
-          <Card className="lg:sticky lg:top-8">
-            <CardHeader>
-              <CardTitle>Installed Keys</CardTitle>
-            </CardHeader>
-            <CardContent>
-              {keys.length === 0 ? (
-                <div className="text-center py-8 text-slate-500">
-                  <Key className="w-12 h-12 mx-auto mb-3 opacity-50" />
-                  <p>No API keys configured yet.</p>
-                  <p className="text-sm mt-1">Add keys below to get started.</p>
-                </div>
-              ) : (
-                <div className="space-y-4">
-                  {serviceConfigs.map((config) => {
-                    const configuredKeys = config.keys.filter(k => isKeyConfigured(k.name));
-                    if (configuredKeys.length === 0) return null;
-
-                    return (
-                      <div key={config.group} className="p-4 bg-slate-900/50 rounded-lg border border-slate-700">
-                        <div className="flex items-center justify-between mb-2">
-                          <p className="font-medium text-white">{config.label}</p>
-                          {isGroupComplete(config) ? (
-                            <span className="flex items-center gap-1 text-xs text-green-400">
-                              <Check className="w-3 h-3" />
-                              Complete
-                            </span>
-                          ) : (
-                            <span className="flex items-center gap-1 text-xs text-yellow-400">
-                              <X className="w-3 h-3" />
-                              Partial
-                            </span>
-                          )}
-                        </div>
-                        <div className="text-sm text-slate-400 space-y-1">
-                          {config.keys.map((keyConfig) => {
-                            const configuredKey = getConfiguredKey(keyConfig.name);
-                            return (
-                              <p key={keyConfig.name} className="flex items-center gap-2">
-                                {configuredKey ? (
-                                  <Check className="w-3 h-3 text-green-400" />
-                                ) : (
-                                  <X className="w-3 h-3 text-slate-600" />
-                                )}
-                                <span className={configuredKey ? 'text-slate-300' : 'text-slate-600'}>
-                                  {keyConfig.label}
-                                </span>
-                                {configuredKey && (
-                                  <span className="font-mono text-slate-500">
-                                    {configuredKey.key_preview}
-                                  </span>
-                                )}
-                              </p>
-                            );
-                          })}
-                        </div>
-                      </div>
-                    );
-                  })}
-                </div>
-              )}
-            </CardContent>
-          </Card>
-        </div>
-      </div>
     </div>
   );
 }

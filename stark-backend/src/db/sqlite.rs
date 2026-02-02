@@ -217,6 +217,20 @@ impl Database {
             conn.execute("ALTER TABLE bot_settings ADD COLUMN max_tool_iterations INTEGER NOT NULL DEFAULT 50", [])?;
         }
 
+        // Migration: Add rogue_mode_enabled column to bot_settings if it doesn't exist
+        let has_rogue_mode: bool = conn
+            .query_row(
+                "SELECT COUNT(*) FROM pragma_table_info('bot_settings') WHERE name='rogue_mode_enabled'",
+                [],
+                |row| row.get::<_, i64>(0),
+            )
+            .map(|c| c > 0)
+            .unwrap_or(false);
+
+        if !has_rogue_mode {
+            conn.execute("ALTER TABLE bot_settings ADD COLUMN rogue_mode_enabled INTEGER NOT NULL DEFAULT 0", [])?;
+        }
+
         // Initialize bot_settings with defaults if empty
         let bot_settings_count: i64 = conn
             .query_row("SELECT COUNT(*) FROM bot_settings", [], |row| row.get(0))

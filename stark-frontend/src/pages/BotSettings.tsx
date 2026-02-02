@@ -1,5 +1,5 @@
 import { useState, useEffect, FormEvent } from 'react';
-import { Save, Bot, Server, Settings } from 'lucide-react';
+import { Save, Bot, Server, Settings, Users, Skull } from 'lucide-react';
 import Card, { CardContent, CardHeader, CardTitle } from '@/components/ui/Card';
 import Button from '@/components/ui/Button';
 import Input from '@/components/ui/Input';
@@ -13,6 +13,7 @@ export default function BotSettings() {
   const [customRpcBase, setCustomRpcBase] = useState('');
   const [customRpcMainnet, setCustomRpcMainnet] = useState('');
   const [maxToolIterations, setMaxToolIterations] = useState(50);
+  const [rogueModeEnabled, setRogueModeEnabled] = useState(false);
   const [rpcProviders, setRpcProviders] = useState<RpcProvider[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [isSaving, setIsSaving] = useState(false);
@@ -31,6 +32,7 @@ export default function BotSettings() {
       setBotEmail(data.bot_email);
       setRpcProvider(data.rpc_provider || 'defirelay');
       setMaxToolIterations(data.max_tool_iterations || 50);
+      setRogueModeEnabled(data.rogue_mode_enabled || false);
       if (data.custom_rpc_endpoints) {
         setCustomRpcBase(data.custom_rpc_endpoints.base || '');
         setCustomRpcMainnet(data.custom_rpc_endpoints.mainnet || '');
@@ -264,6 +266,72 @@ export default function BotSettings() {
                 Save Agent Settings
               </Button>
             </form>
+          </CardContent>
+        </Card>
+
+        {/* Operating Mode Section */}
+        <Card>
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2">
+              {rogueModeEnabled ? (
+                <Skull className="w-5 h-5 text-red-400" />
+              ) : (
+                <Users className="w-5 h-5 text-stark-400" />
+              )}
+              Operating Mode
+            </CardTitle>
+          </CardHeader>
+          <CardContent>
+            <div className="flex items-center justify-between p-4 bg-slate-800/50 rounded-lg">
+              <div className="flex items-center gap-3">
+                <Users className={`w-5 h-5 ${!rogueModeEnabled ? 'text-stark-400' : 'text-slate-500'}`} />
+                <span className={`font-medium ${!rogueModeEnabled ? 'text-white' : 'text-slate-500'}`}>
+                  Partner
+                </span>
+              </div>
+
+              <button
+                onClick={async () => {
+                  const newValue = !rogueModeEnabled;
+                  setIsSaving(true);
+                  setMessage(null);
+                  try {
+                    const updated = await updateBotSettings({
+                      rogue_mode_enabled: newValue,
+                    });
+                    setSettings(updated);
+                    setRogueModeEnabled(newValue);
+                    setMessage({ type: 'success', text: `Switched to ${newValue ? 'Rogue' : 'Partner'} mode` });
+                  } catch (err) {
+                    setMessage({ type: 'error', text: 'Failed to update operating mode' });
+                  } finally {
+                    setIsSaving(false);
+                  }
+                }}
+                disabled={isSaving}
+                className={`relative w-14 h-7 rounded-full transition-colors duration-200 ${
+                  rogueModeEnabled
+                    ? 'bg-red-500'
+                    : 'bg-stark-500'
+                } ${isSaving ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer'}`}
+              >
+                <div
+                  className={`absolute top-1 w-5 h-5 rounded-full bg-white transition-transform duration-200 ${
+                    rogueModeEnabled ? 'translate-x-8' : 'translate-x-1'
+                  }`}
+                />
+              </button>
+
+              <div className="flex items-center gap-3">
+                <span className={`font-medium ${rogueModeEnabled ? 'text-white' : 'text-slate-500'}`}>
+                  Rogue
+                </span>
+                <Skull className={`w-5 h-5 ${rogueModeEnabled ? 'text-red-400' : 'text-slate-500'}`} />
+              </div>
+            </div>
+            <p className="text-xs text-slate-500 mt-2">
+              Partner mode: collaborative assistant. Rogue mode: autonomous agent.
+            </p>
           </CardContent>
         </Card>
 

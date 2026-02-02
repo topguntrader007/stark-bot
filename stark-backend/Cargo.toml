@@ -55,6 +55,9 @@ rand = "0.8"
 getrandom = "0.2"
 base64 = "0.22"
 
+# ECIES encryption for cloud backup
+ecies = "0.2"
+
 # URL parsing
 url = "2"
 urlencoding = "2"

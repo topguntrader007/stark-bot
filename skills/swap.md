@@ -129,11 +129,23 @@ preset: gas_price
 network: base
 ```
 
-### 11. Execute swap
+### 11. Queue swap transaction
 ```tool:web3_tx
 from_register: swap_quote
 max_fee_per_gas: "<GAS_PRICE>"
 network: base
+```
+
+### 12. Verify queued transaction
+After queueing, confirm the transaction details:
+```tool:list_queued_web3_tx
+status: pending
+limit: 1
+```
+
+### 13. Broadcast when ready
+```tool:broadcast_web3_tx
+uuid: <UUID_FROM_PREVIOUS_STEP>
 ```
 
 ---
@@ -222,11 +234,23 @@ preset: gas_price
 network: base
 ```
 
-### 8. Execute swap
+### 8. Queue swap transaction
 ```tool:web3_tx
 from_register: swap_quote
 max_fee_per_gas: "<GAS_PRICE>"
 network: base
+```
+
+### 9. Verify queued transaction
+After queueing, confirm the transaction details:
+```tool:list_queued_web3_tx
+status: pending
+limit: 1
+```
+
+### 10. Broadcast when ready
+```tool:broadcast_web3_tx
+uuid: <UUID_FROM_PREVIOUS_STEP>
 ```
 
 ---

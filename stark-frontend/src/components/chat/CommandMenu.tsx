@@ -89,10 +89,10 @@ export default function CommandMenu({ onCommandSelect, className }: CommandMenuP
       {isOpen && (
         <div
           ref={menuRef}
-          className="absolute bottom-full right-0 mb-2 w-64 bg-slate-800 border border-slate-700 rounded-lg shadow-xl overflow-hidden z-50"
+          className="fixed sm:absolute bottom-20 sm:bottom-full right-4 sm:right-0 left-4 sm:left-auto sm:mb-2 w-auto sm:w-64 max-h-[70vh] sm:max-h-none bg-slate-800 border border-slate-700 rounded-lg shadow-xl overflow-hidden z-50"
           role="menu"
         >
-          <div className="max-h-80 overflow-y-auto">
+          <div className="max-h-[calc(70vh-3rem)] sm:max-h-80 overflow-y-auto">
             {Object.entries(commandsByCategory).map(([category, commands], categoryIndex) => (
               <div key={category}>
                 {/* Category Header */}
