@@ -58,11 +58,19 @@ export default function Sidebar() {
         <div className="space-y-1">
           <NavItem to="/dashboard" icon={Home} label="Dashboard" />
           <NavItem to="/agent-chat" icon={MessageSquare} label="Agent Chat" />
-          <NavItem to="/channels" icon={Monitor} label="Channels" />
           <NavItem to="/agent-settings" icon={Settings} label="Agent Settings" />
           <NavItem to="/bot-settings" icon={Bot} label="Bot Settings" />
+          <NavItem to="/crypto-transactions" icon={Wallet} label="Crypto Transactions" />
           <NavItem to="/tools" icon={Wrench} label="Tools" />
           <NavItem to="/skills" icon={Zap} label="Skills" />
+        </div>
+
+        {/* Configuration Section */}
+        <div className="pt-4 mt-4 border-t border-slate-700 space-y-1">
+          <p className="px-4 py-2 text-xs font-semibold text-slate-500 uppercase tracking-wider">
+            Configuration
+          </p>
+          <NavItem to="/channels" icon={Monitor} label="Channels" />
           <NavItem to="/scheduling" icon={Clock} label="Scheduling" />
           <NavItem to="/api-keys" icon={Key} label="API Keys" />
         </div>
@@ -87,7 +95,6 @@ export default function Sidebar() {
           </p>
           <NavItem to="/logs" icon={ScrollText} label="Live Logs" />
           <NavItem to="/debug" icon={Bug} label="Debug" />
-          <NavItem to="/crypto-transactions" icon={Wallet} label="Crypto Transactions" />
           <NavItem to="/payments" icon={DollarSign} label="Payments" />
           <NavItem to="/eip8004" icon={Shield} label="EIP-8004" />
         </div>

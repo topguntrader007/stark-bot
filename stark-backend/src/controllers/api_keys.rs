@@ -357,11 +357,31 @@ struct KeystoreBackupRequest {
     wallet_id: String,
     encrypted_data: String,
     key_count: usize,
+    timestamp: i64,
+    signature: String,
 }
 
 #[derive(Deserialize)]
 struct KeystoreBackupResponse {
     encrypted_data: String,
+}
+
+/// Sign a message with the burner wallet private key
+fn sign_message(private_key: &str, message: &str) -> Result<String, String> {
+    use ethers::signers::{LocalWallet, Signer};
+
+    let wallet: LocalWallet = private_key
+        .parse()
+        .map_err(|e| format!("Invalid private key: {}", e))?;
+
+    // Sign synchronously using the blocking runtime
+    let signature = tokio::task::block_in_place(|| {
+        tokio::runtime::Handle::current().block_on(async {
+            wallet.sign_message(message).await
+        })
+    }).map_err(|e| format!("Failed to sign message: {}", e))?;
+
+    Ok(format!("0x{}", hex::encode(signature.to_vec())))
 }
 
 pub fn config(cfg: &mut web::ServiceConfig) {

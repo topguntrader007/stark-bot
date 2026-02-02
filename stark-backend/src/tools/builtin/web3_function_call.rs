@@ -5,15 +5,16 @@
 //!
 //! Supports presets for common operations (weth_deposit, weth_withdraw, etc.)
 //! that read parameters from registers.
+//!
+//! IMPORTANT: Transactions are QUEUED, not broadcast. Use broadcast_web3_tx to broadcast.
 
-use crate::gateway::events::EventBroadcaster;
-use crate::gateway::protocol::GatewayEvent;
 use crate::tools::builtin::web3_tx::parse_u256;
 use crate::tools::presets::{get_web3_preset, list_web3_presets};
 use crate::tools::registry::Tool;
 use crate::tools::types::{
     PropertySchema, ToolContext, ToolDefinition, ToolGroup, ToolInputSchema, ToolResult,
 };
+use crate::tx_queue::QueuedTransaction;
 use crate::x402::X402EvmRpc;
 use async_trait::async_trait;
 use ethers::abi::{Abi, Function, Token, ParamType};
@@ -24,8 +25,22 @@ use serde::Deserialize;
 use serde_json::{json, Value};
 use std::collections::HashMap;
 use std::path::PathBuf;
-use std::sync::Arc;
-use std::time::Duration;
+use uuid::Uuid;
+
+/// Signed transaction result for queuing (not broadcast)
+#[derive(Debug)]
+struct SignedTxForQueue {
+    from: String,
+    to: String,
+    value: String,
+    data: String,
+    gas_limit: String,
+    max_fee_per_gas: String,
+    max_priority_fee_per_gas: String,
+    nonce: u64,
+    signed_tx_hex: String,
+    network: String,
+}
 
 /// Web3 function call tool
 pub struct Web3FunctionCallTool {
@@ -139,7 +154,7 @@ impl Web3FunctionCallTool {
         Web3FunctionCallTool {
             definition: ToolDefinition {
                 name: "web3_function_call".to_string(),
-                description: "Call a smart contract function. Use 'preset' for common operations (weth_deposit, weth_withdraw, weth_balance) which read params from registers. Or specify abi/contract/function directly for custom calls.".to_string(),
+                description: "Call a smart contract function. Use 'preset' for common operations (weth_deposit, weth_withdraw, weth_balance) which read params from registers. Or specify abi/contract/function directly for custom calls. Write transactions are QUEUED (not broadcast) - use broadcast_web3_tx to broadcast.".to_string(),
                 input_schema: ToolInputSchema {
                     schema_type: "object".to_string(),
                     properties,
@@ -326,15 +341,13 @@ impl Web3FunctionCallTool {
         rpc.call(to, &calldata).await
     }
 
-    /// Send a transaction
-    async fn send_transaction(
+    /// Sign a transaction for queuing (does NOT broadcast)
+    async fn sign_transaction_for_queue(
         network: &str,
         to: Address,
         calldata: Vec<u8>,
         value: U256,
-        broadcaster: Option<&Arc<EventBroadcaster>>,
-        channel_id: Option<i64>,
-    ) -> Result<(String, String, String), String> {
+    ) -> Result<SignedTxForQueue, String> {
         let private_key = Self::get_private_key()?;
         let rpc = X402EvmRpc::new(&private_key, network)?;
         let chain_id = rpc.chain_id();
@@ -342,19 +355,20 @@ impl Web3FunctionCallTool {
         let wallet = Self::get_wallet(chain_id)?;
         let from_address = wallet.address();
         let from_str = format!("{:?}", from_address);
+        let to_str = format!("{:?}", to);
 
         // Get nonce
         let nonce = rpc.get_transaction_count(from_address).await?;
 
         // Estimate gas
-        let gas = rpc.estimate_gas(from_address, to, &calldata, value).await?;
-        let gas = gas * 120 / 100; // 20% buffer
+        let gas: U256 = rpc.estimate_gas(from_address, to, &calldata, value).await?;
+        let gas = gas * U256::from(120) / U256::from(100); // 20% buffer
 
         // Get gas prices
         let (max_fee, priority_fee) = rpc.estimate_eip1559_fees().await?;
 
         log::info!(
-            "[web3_function_call] Sending tx: to={:?}, value={}, data_len={} bytes, gas={}, nonce={} on {}",
+            "[web3_function_call] Signing tx for queue: to={:?}, value={}, data_len={} bytes, gas={}, nonce={} on {}",
             to, value, calldata.len(), gas, nonce, network
         );
 
@@ -363,7 +377,7 @@ impl Web3FunctionCallTool {
             .from(from_address)
             .to(to)
             .value(value)
-            .data(calldata)
+            .data(calldata.clone())
             .nonce(nonce)
             .gas(gas)
             .max_fee_per_gas(max_fee)
@@ -379,51 +393,22 @@ impl Web3FunctionCallTool {
 
         // Serialize the signed transaction
         let signed_tx = typed_tx.rlp_signed(&signature);
+        let signed_tx_hex = format!("0x{}", hex::encode(&signed_tx));
 
-        // Broadcast via x402 RPC
-        let tx_hash = rpc.send_raw_transaction(&signed_tx).await?;
-        let tx_hash_str = format!("{:?}", tx_hash);
+        log::info!("[web3_function_call] Transaction signed for queue, nonce={}", nonce);
 
-        log::info!("[web3_function_call] Transaction sent: {}", tx_hash_str);
-
-        // Get explorer URL
-        let explorer = if network == "mainnet" {
-            "https://etherscan.io/tx"
-        } else {
-            "https://basescan.org/tx"
-        };
-        let explorer_url = format!("{}/{}", explorer, tx_hash_str);
-
-        // Emit tx.pending event
-        if let (Some(broadcaster), Some(ch_id)) = (broadcaster, channel_id) {
-            broadcaster.broadcast(GatewayEvent::tx_pending(
-                ch_id,
-                &tx_hash_str,
-                network,
-                &explorer_url,
-            ));
-        }
-
-        // Wait for receipt
-        let receipt = rpc.wait_for_receipt(tx_hash, Duration::from_secs(120)).await?;
-
-        let status = if receipt.status == Some(U64::from(1)) {
-            "confirmed".to_string()
-        } else {
-            "reverted".to_string()
-        };
-
-        // Emit tx.confirmed event
-        if let (Some(broadcaster), Some(ch_id)) = (broadcaster, channel_id) {
-            broadcaster.broadcast(GatewayEvent::tx_confirmed(
-                ch_id,
-                &tx_hash_str,
-                network,
-                &status,
-            ));
-        }
-
-        Ok((from_str, tx_hash_str, status))
+        Ok(SignedTxForQueue {
+            from: from_str,
+            to: to_str,
+            value: value.to_string(),
+            data: format!("0x{}", hex::encode(&calldata)),
+            gas_limit: gas.to_string(),
+            max_fee_per_gas: max_fee.to_string(),
+            max_priority_fee_per_gas: priority_fee.to_string(),
+            nonce: nonce.as_u64(),
+            signed_tx_hex,
+            network: network.to_string(),
+        })
     }
 
     /// Decode return value from a call
@@ -707,34 +692,82 @@ impl Tool for Web3FunctionCallTool {
                 Err(e) => return ToolResult::error(format!("Invalid value: {} - {}", value, e)),
             };
 
-            match Self::send_transaction(
+            // Check if tx_queue is available
+            let tx_queue = match &context.tx_queue {
+                Some(q) => q,
+                None => return ToolResult::error("Transaction queue not available. Contact administrator."),
+            };
+
+            // Sign the transaction (but don't broadcast)
+            match Self::sign_transaction_for_queue(
                 &params.network,
                 contract,
                 calldata,
                 tx_value,
-                context.broadcaster.as_ref(),
-                context.channel_id,
             ).await {
-                Ok((from, tx_hash, status)) => {
-                    let explorer = if params.network == "mainnet" {
-                        "https://etherscan.io/tx"
+                Ok(signed) => {
+                    // Generate UUID for this queued transaction
+                    let uuid = Uuid::new_v4().to_string();
+
+                    // Create queued transaction
+                    let queued_tx = QueuedTransaction::new(
+                        uuid.clone(),
+                        signed.network.clone(),
+                        signed.from.clone(),
+                        signed.to.clone(),
+                        signed.value.clone(),
+                        signed.data.clone(),
+                        signed.gas_limit.clone(),
+                        signed.max_fee_per_gas.clone(),
+                        signed.max_priority_fee_per_gas.clone(),
+                        signed.nonce,
+                        signed.signed_tx_hex.clone(),
+                        context.channel_id,
+                    );
+
+                    // Queue the transaction
+                    tx_queue.queue(queued_tx);
+
+                    log::info!("[web3_function_call] Transaction queued with UUID: {}", uuid);
+
+                    // Format value as ETH for display
+                    let value_eth = if let Ok(w) = signed.value.parse::<u128>() {
+                        let eth = w as f64 / 1e18;
+                        if eth >= 0.0001 {
+                            format!("{:.6} ETH", eth)
+                        } else {
+                            format!("{} wei", signed.value)
+                        }
                     } else {
-                        "https://basescan.org/tx"
+                        format!("{} wei", signed.value)
                     };
 
                     ToolResult::success(format!(
-                        "Transaction {}\nFunction: {}::{}()\nFrom: {}\nTo: {}\nHash: {}\nExplorer: {}/{}",
-                        status, abi_name, function_name, from, contract_addr, tx_hash, explorer, tx_hash
+                        "TRANSACTION QUEUED (not yet broadcast)\n\n\
+                        UUID: {}\n\
+                        Function: {}::{}()\n\
+                        Network: {}\n\
+                        From: {}\n\
+                        To: {}\n\
+                        Value: {} ({})\n\
+                        Nonce: {}\n\n\
+                        --- Next Steps ---\n\
+                        To view queued: use `list_queued_web3_tx`\n\
+                        To broadcast: use `broadcast_web3_tx` with uuid: {}",
+                        uuid, abi_name, function_name, signed.network, signed.from,
+                        contract_addr, signed.value, value_eth, signed.nonce, uuid
                     )).with_metadata(json!({
+                        "uuid": uuid,
+                        "status": "queued",
                         "preset": params.preset,
                         "abi": abi_name,
                         "contract": contract_addr,
                         "function": function_name,
-                        "from": from,
-                        "tx_hash": tx_hash,
-                        "status": status,
-                        "network": params.network,
-                        "explorer_url": format!("{}/{}", explorer, tx_hash)
+                        "from": signed.from,
+                        "to": contract_addr,
+                        "value": signed.value,
+                        "nonce": signed.nonce,
+                        "network": params.network
                     }))
                 }
                 Err(e) => ToolResult::error(e),

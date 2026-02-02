@@ -22,6 +22,7 @@ import {
   Sparkles,
   BookOpen,
   X,
+  Wallet,
 } from 'lucide-react';
 import clsx from 'clsx';
 import { useAuth } from '@/hooks/useAuth';
@@ -87,11 +88,15 @@ export default function MobileNavDrawer({ isOpen, onClose }: MobileNavDrawerProp
   const mainItems = [
     { to: '/dashboard', icon: Home, label: 'Dashboard' },
     { to: '/agent-chat', icon: MessageSquare, label: 'Agent Chat' },
-    { to: '/channels', icon: Monitor, label: 'Channels' },
     { to: '/agent-settings', icon: Settings, label: 'Agent Settings' },
     { to: '/bot-settings', icon: Bot, label: 'Bot Settings' },
+    { to: '/crypto-transactions', icon: Wallet, label: 'Crypto Transactions' },
     { to: '/tools', icon: Wrench, label: 'Tools' },
     { to: '/skills', icon: Zap, label: 'Skills' },
+  ];
+
+  const configItems = [
+    { to: '/channels', icon: Monitor, label: 'Channels' },
     { to: '/scheduling', icon: Clock, label: 'Scheduling' },
     { to: '/api-keys', icon: Key, label: 'API Keys' },
   ];
@@ -151,6 +156,22 @@ export default function MobileNavDrawer({ isOpen, onClose }: MobileNavDrawerProp
           {/* Main Section */}
           <div className="space-y-1">
             {mainItems.map((item) => (
+              <DrawerNavItem
+                key={item.to}
+                to={item.to}
+                icon={item.icon}
+                label={item.label}
+                onClick={onClose}
+              />
+            ))}
+          </div>
+
+          {/* Configuration Section */}
+          <div className="pt-4 mt-4 border-t border-slate-700 space-y-1">
+            <p className="px-4 py-2 text-xs font-semibold text-slate-500 uppercase tracking-wider">
+              Configuration
+            </p>
+            {configItems.map((item) => (
               <DrawerNavItem
                 key={item.to}
                 to={item.to}
