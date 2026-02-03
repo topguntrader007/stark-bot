@@ -13,6 +13,7 @@ use crate::gateway::events::EventBroadcaster;
 use crate::gateway::protocol::GatewayEvent;
 use crate::models::Channel;
 use crate::tools::ToolRegistry;
+use crate::tx_queue::TxQueueManager;
 use dashmap::DashMap;
 use std::sync::Arc;
 use tokio::sync::oneshot;
@@ -25,6 +26,7 @@ pub struct ChannelManager {
     tool_registry: Option<Arc<ToolRegistry>>,
     execution_tracker: Arc<ExecutionTracker>,
     burner_wallet_private_key: Option<String>,
+    tx_queue: Option<Arc<TxQueueManager>>,
 }
 
 impl ChannelManager {
@@ -37,6 +39,7 @@ impl ChannelManager {
             tool_registry: None,
             execution_tracker,
             burner_wallet_private_key: None,
+            tx_queue: None,
         }
     }
 
@@ -62,7 +65,14 @@ impl ChannelManager {
             tool_registry: Some(tool_registry),
             execution_tracker,
             burner_wallet_private_key,
+            tx_queue: None,
         }
+    }
+
+    /// Set the transaction queue manager for web3 transactions
+    pub fn with_tx_queue(mut self, tx_queue: Arc<TxQueueManager>) -> Self {
+        self.tx_queue = Some(tx_queue);
+        self
     }
 
     /// Check if a channel is currently running
@@ -91,13 +101,18 @@ impl ChannelManager {
 
         // Create dispatcher with or without tools (and wallet for x402 payment support)
         let dispatcher = if let Some(ref tool_registry) = self.tool_registry {
-            Arc::new(MessageDispatcher::new_with_wallet(
+            let mut disp = MessageDispatcher::new_with_wallet(
                 self.db.clone(),
                 self.broadcaster.clone(),
                 tool_registry.clone(),
                 self.execution_tracker.clone(),
                 self.burner_wallet_private_key.clone(),
-            ))
+            );
+            // Add tx_queue if available (needed for web3 transactions)
+            if let Some(ref tx_queue) = self.tx_queue {
+                disp = disp.with_tx_queue(tx_queue.clone());
+            }
+            Arc::new(disp)
         } else {
             Arc::new(MessageDispatcher::new_without_tools(
                 self.db.clone(),

@@ -8,6 +8,7 @@ pub use events::EventBroadcaster;
 use crate::channels::ChannelManager;
 use crate::db::Database;
 use crate::tools::ToolRegistry;
+use crate::tx_queue::TxQueueManager;
 use std::sync::Arc;
 
 /// Main Gateway struct that owns all channel connections and exposes WebSocket RPC
@@ -40,13 +41,28 @@ impl Gateway {
         tool_registry: Arc<ToolRegistry>,
         burner_wallet_private_key: Option<String>,
     ) -> Self {
+        Self::new_with_tools_wallet_and_tx_queue(db, tool_registry, burner_wallet_private_key, None)
+    }
+
+    /// Create a new Gateway with tool registry, wallet, and transaction queue support
+    pub fn new_with_tools_wallet_and_tx_queue(
+        db: Arc<Database>,
+        tool_registry: Arc<ToolRegistry>,
+        burner_wallet_private_key: Option<String>,
+        tx_queue: Option<Arc<TxQueueManager>>,
+    ) -> Self {
         let broadcaster = Arc::new(EventBroadcaster::new());
-        let channel_manager = Arc::new(ChannelManager::new_with_tools_and_wallet(
+        let mut channel_manager = ChannelManager::new_with_tools_and_wallet(
             db.clone(),
             broadcaster.clone(),
             tool_registry,
             burner_wallet_private_key,
-        ));
+        );
+        // Add tx_queue if provided (needed for web3 transactions in channels)
+        if let Some(tq) = tx_queue {
+            channel_manager = channel_manager.with_tx_queue(tq);
+        }
+        let channel_manager = Arc::new(channel_manager);
 
         Self {
             db,

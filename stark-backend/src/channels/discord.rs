@@ -170,13 +170,19 @@ impl EventHandler for DiscordHandler {
                         }
                     );
 
+                    // Add source hint to help the agent understand the context
+                    let text_with_hint = format!(
+                        "[DISCORD MESSAGE - Use discord skill for tipping/messaging. Use discord_resolve_user to resolve @mentions to addresses.]\n\n{}",
+                        forward.text
+                    );
+
                     let normalized = NormalizedMessage {
                         channel_id: self.channel_id,
                         channel_type: ChannelType::Discord.to_string(),
                         chat_id: msg.channel_id.to_string(),
                         user_id,
                         user_name: user_name.clone(),
-                        text: forward.text,
+                        text: text_with_hint,
                         message_id: Some(msg.id.to_string()),
                         session_mode: None,
                     };
@@ -193,7 +199,9 @@ impl EventHandler for DiscordHandler {
             }
             Err(e) => {
                 log::error!("Discord hooks error: {}", e);
-                // Fall through to original behavior
+                // Security: Do NOT fall through - this would bypass admin checks
+                let _ = msg.channel_id.say(&ctx.http, "Sorry, I encountered an error processing your message.").await;
+                return;
             }
         }
         // ===== End Discord Hooks Integration =====
@@ -298,31 +306,46 @@ impl DiscordHandler {
                         format_tool_result_for_discord(tool_name, success, duration_ms, content, output_config.tool_result_verbosity)
                     }
                     "agent.mode_change" => {
-                        let mode = event.data.get("mode")
-                            .and_then(|v| v.as_str())
-                            .unwrap_or("unknown");
-                        let label = event.data.get("label")
-                            .and_then(|v| v.as_str())
-                            .unwrap_or("Unknown");
-                        let reason = event.data.get("reason")
-                            .and_then(|v| v.as_str());
-                        Some(format_mode_change_for_discord(mode, label, reason))
+                        // Skip mode changes in minimal/none verbosity
+                        if matches!(output_config.tool_call_verbosity, ToolOutputVerbosity::Minimal | ToolOutputVerbosity::None) {
+                            None
+                        } else {
+                            let mode = event.data.get("mode")
+                                .and_then(|v| v.as_str())
+                                .unwrap_or("unknown");
+                            let label = event.data.get("label")
+                                .and_then(|v| v.as_str())
+                                .unwrap_or("Unknown");
+                            let reason = event.data.get("reason")
+                                .and_then(|v| v.as_str());
+                            Some(format_mode_change_for_discord(mode, label, reason))
+                        }
                     }
                     "execution.task_started" => {
-                        let task_type = event.data.get("type")
-                            .and_then(|v| v.as_str())
-                            .unwrap_or("task");
-                        let name = event.data.get("name")
-                            .and_then(|v| v.as_str())
-                            .unwrap_or("Unknown task");
-                        Some(format!("▶️ **{}:** {}", task_type, name))
+                        // Skip task started in minimal/none verbosity
+                        if matches!(output_config.tool_call_verbosity, ToolOutputVerbosity::Minimal | ToolOutputVerbosity::None) {
+                            None
+                        } else {
+                            let task_type = event.data.get("type")
+                                .and_then(|v| v.as_str())
+                                .unwrap_or("task");
+                            let name = event.data.get("name")
+                                .and_then(|v| v.as_str())
+                                .unwrap_or("Unknown task");
+                            Some(format!("▶️ **{}:** {}", task_type, name))
+                        }
                     }
                     "execution.task_completed" => {
-                        let status = event.data.get("status")
-                            .and_then(|v| v.as_str())
-                            .unwrap_or("completed");
-                        let emoji = if status == "completed" { "✅" } else { "❌" };
-                        Some(format!("{} Task {}", emoji, status))
+                        // Skip task completed in minimal/none verbosity
+                        if matches!(output_config.tool_call_verbosity, ToolOutputVerbosity::Minimal | ToolOutputVerbosity::None) {
+                            None
+                        } else {
+                            let status = event.data.get("status")
+                                .and_then(|v| v.as_str())
+                                .unwrap_or("completed");
+                            let emoji = if status == "completed" { "✅" } else { "❌" };
+                            Some(format!("{} Task {}", emoji, status))
+                        }
                     }
                     _ => None,
                 };

@@ -117,12 +117,18 @@ async fn main() -> std::io::Result<()> {
     });
     log::info!("Loaded {} skills from disk, {} total in database", skill_count, skill_registry.len());
 
-    // Initialize Gateway with tool registry and wallet for x402 payment support
+    // Initialize Transaction Queue Manager with DB for persistent broadcast history
+    // NOTE: Must be created before Gateway so channels can use it for web3 transactions
+    log::info!("Initializing transaction queue manager");
+    let tx_queue = Arc::new(TxQueueManager::with_db(db.clone()));
+
+    // Initialize Gateway with tool registry, wallet, and tx_queue for channels
     log::info!("Initializing Gateway");
-    let gateway = Arc::new(Gateway::new_with_tools_and_wallet(
+    let gateway = Arc::new(Gateway::new_with_tools_wallet_and_tx_queue(
         db.clone(),
         tool_registry.clone(),
         config.burner_wallet_private_key.clone(),
+        Some(tx_queue.clone()),
     ));
 
     // Initialize Execution Tracker for progress display
@@ -139,10 +145,6 @@ async fn main() -> std::io::Result<()> {
     log::info!("Initializing tool validator registry");
     let validator_registry = Arc::new(tool_validators::create_default_registry());
     log::info!("Registered {} tool validators", validator_registry.len());
-
-    // Initialize Transaction Queue Manager with DB for persistent broadcast history
-    log::info!("Initializing transaction queue manager");
-    let tx_queue = Arc::new(TxQueueManager::with_db(db.clone()));
 
     // Create the shared MessageDispatcher for all message processing
     log::info!("Initializing message dispatcher");

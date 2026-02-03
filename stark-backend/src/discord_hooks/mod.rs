@@ -225,14 +225,51 @@ pub async fn process(
             ))
         } else {
             // Admin mentioned bot without "query" keyword and wasn't in listening mode
-            // Explain how to activate query mode
-            Ok(ProcessResult::handled(
-                "Hi! I'd be happy to help with a query. Just say the magic word **\"query\"** \
-                (e.g., `@starkbot query`) and I'll listen for your next command.\n\n\
-                Example:\n\
-                1. `@starkbot query` → I'll respond that I'm ready\n\
-                2. `@starkbot check my portfolio` → I'll process this as an agentic query".to_string(),
-            ))
+            let cmd_lower = command_text.to_lowercase();
+
+            // Check if this is a "register" command - allow admins to register like regular users
+            if cmd_lower.starts_with("register") {
+                log::info!(
+                    "Discord hooks: Admin {} using register command as regular user",
+                    user_name
+                );
+                // Fall through to regular user command handling for registration
+                match commands::parse(&command_text) {
+                    Some(cmd) => {
+                        let response = commands::execute(cmd, &user_id, db).await?;
+                        Ok(ProcessResult::handled(response))
+                    }
+                    None => {
+                        // This shouldn't happen since we checked it starts with "register",
+                        // but handle it gracefully (e.g., "register" with no address)
+                        Ok(ProcessResult::handled(
+                            "Invalid register command. Usage: `@starkbot register 0x...`".to_string(),
+                        ))
+                    }
+                }
+            } else if cmd_lower.contains(" tip ") || cmd_lower.starts_with("tip ") {
+                // Allow admins to tip without query mode - forward directly to agent
+                // Require " tip " as a word to avoid matching "multiple", "tipper", etc.
+                log::info!(
+                    "Discord hooks: Admin {} using tip command, forwarding to agent",
+                    user_name
+                );
+                Ok(ProcessResult::forward_to_agent(ForwardRequest {
+                    text: command_text,
+                    user_id,
+                    user_name,
+                    is_admin: true,
+                }))
+            } else {
+                // Explain how to activate query mode
+                Ok(ProcessResult::handled(
+                    "Hi! I'd be happy to help with a query. Just say the magic word **\"query\"** \
+                    (e.g., `@starkbot query`) and I'll listen for your next command.\n\n\
+                    Example:\n\
+                    1. `@starkbot query` → I'll respond that I'm ready\n\
+                    2. `@starkbot check my portfolio` → I'll process this as an agentic query".to_string(),
+                ))
+            }
         }
     } else {
         // Regular user: try limited commands

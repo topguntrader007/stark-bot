@@ -478,6 +478,28 @@ impl Tool for Web3TxTool {
             return ToolResult::error("Network must be 'base' or 'mainnet'");
         }
 
+        // Check if we're in a gateway channel (discord, telegram, slack) without rogue mode
+        // Gateway channels require rogue mode to be enabled for transactions
+        let is_gateway_channel = context.channel_type
+            .as_ref()
+            .map(|ct| {
+                let ct_lower = ct.to_lowercase();
+                ct_lower == "discord" || ct_lower == "telegram" || ct_lower == "slack"
+            })
+            .unwrap_or(false);
+
+        let is_rogue_mode = context.extra
+            .get("rogue_mode_enabled")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
+
+        if is_gateway_channel && !is_rogue_mode {
+            return ToolResult::error(
+                "Transactions cannot be executed in Discord/Telegram/Slack channels unless Rogue Mode is enabled. \
+                Please enable Rogue Mode in the bot settings to allow autonomous transactions from gateway channels."
+            );
+        }
+
         // Check if tx_queue is available
         let tx_queue = match &context.tx_queue {
             Some(q) => q,

@@ -1,11 +1,11 @@
 ---
 name: discord
 description: "Control Discord: send messages, react, post stickers/emojis, run polls, manage threads/pins, fetch permissions/member/role/channel info, handle moderation."
-version: 1.0.0
+version: 2.0.0
 author: starkbot
 metadata: {"clawdbot":{"emoji":"🎮"}}
 tags: [discord, social, messaging, communication, social-media]
-requires_tools: [discord, discord_lookup, agent_send]
+requires_tools: [discord, discord_lookup, agent_send, discord_resolve_user]
 ---
 
 # Discord Actions
@@ -119,6 +119,59 @@ channelId: "123"
 - Upload new emojis/stickers for release moments.
 - Run weekly "priority check" polls in team channels.
 - DM stickers as acknowledgements when a user's request is completed.
+
+## Tipping Discord Users
+
+When a user says "tip @someone X TOKEN", follow these steps:
+
+### Step 1: Resolve the Discord mention to a public address
+
+```tool:discord_resolve_user
+user_mention: "<@123456789>"
+```
+
+This returns the user's registered public address (if they have one). Users register their address with `@starkbot register 0x...`.
+
+**If the user is not registered**, inform them they need to register first.
+
+### Step 2: Transfer tokens to the resolved address
+
+Use the transfer skill to send tokens. For ERC20 tokens:
+
+```tool:web3_function_call
+abi: erc20
+contract: "<TOKEN_ADDRESS>"
+function: transfer
+params: ["<RESOLVED_ADDRESS>", "<AMOUNT_IN_SMALLEST_UNIT>"]
+network: base
+```
+
+### Complete Example: "tip @jimmy 100 USDC"
+
+1. Resolve @jimmy:
+```tool:discord_resolve_user
+user_mention: "<@jimmy's_user_id>"
+```
+Response: `{"public_address": "0x04abc...", "registered": true}`
+
+2. Transfer 100 USDC (6 decimals = 100000000):
+```tool:web3_function_call
+abi: erc20
+contract: "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913"
+function: transfer
+params: ["0x04abc...", "100000000"]
+network: base
+```
+
+3. Confirm to the user: "Sent 100 USDC to @jimmy (0x04abc...)"
+
+### Common Token Addresses (Base)
+
+| Token | Address | Decimals |
+|-------|---------|----------|
+| USDC | `0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913` | 6 |
+| WETH | `0x4200000000000000000000000000000000000006` | 18 |
+| BNKR | `0x22aF33FE49fD1Fa80c7149773dDe5890D3c76F3b` | 18 |
 
 ## Finding Servers and Channels by Name
 
