@@ -1,18 +1,18 @@
 ---
 name: polymarket_trading
-description: "Trade on Polymarket prediction markets - place bets, manage orders, check positions and P&L."
-version: 1.0.0
+description: "Explore and trade on Polymarket - search markets, check prices, place bets, manage orders."
+version: 2.0.0
 author: starkbot
 homepage: https://docs.polymarket.com/
 metadata: {"clawdbot":{"emoji":"🎲"}}
-requires_tools: [polymarket_trade, web_fetch]
+requires_tools: [polymarket_trade]
 tags: [polymarket, prediction-markets, trading, betting, crypto, defi, polygon]
 arguments:
   action:
-    description: "Trading action: bet, positions, orders, cancel"
+    description: "Action: search, trending, bet, positions, orders, cancel"
     required: false
   market:
-    description: "Market question or token ID to trade"
+    description: "Market question, slug, or token ID"
     required: false
   amount:
     description: "Amount in USD to bet"
@@ -24,13 +24,74 @@ arguments:
 
 # Polymarket Trading Guide
 
-You can trade on Polymarket prediction markets using the `polymarket_trade` tool. This allows placing bets, managing orders, and tracking positions.
+You can explore and trade on Polymarket prediction markets using the `polymarket_trade` tool. This includes market discovery (no wallet needed) and trading operations (requires wallet).
 
-## Prerequisites
+## Prerequisites (for Trading)
 
 1. **Wallet Setup**: `BURNER_WALLET_BOT_PRIVATE_KEY` must be configured
 2. **USDC on Polygon**: The wallet needs USDC on Polygon network for betting
-3. **Token Approvals**: One-time approval needed (use `approve_tokens` action)
+3. **Token Approvals**: One-time approval needed
+
+> **Note**: Market discovery (search, trending, get_market, get_price) works without a wallet!
+
+---
+
+## Market Discovery (No Wallet Needed)
+
+### Search Markets by Keyword
+
+```json
+{
+  "tool": "polymarket_trade",
+  "action": "search_markets",
+  "query": "bitcoin"
+}
+```
+
+### Get Trending/Popular Markets
+
+```json
+{
+  "tool": "polymarket_trade",
+  "action": "trending_markets",
+  "limit": 10
+}
+```
+
+### Filter by Category
+
+```json
+{
+  "tool": "polymarket_trade",
+  "action": "search_markets",
+  "tag": "crypto",
+  "limit": 10
+}
+```
+
+Available tags: `politics`, `crypto`, `sports`, `finance`, `science`, `entertainment`, `world`
+
+### Get Market Details by Slug
+
+```json
+{
+  "tool": "polymarket_trade",
+  "action": "get_market",
+  "slug": "will-bitcoin-hit-100k-in-2025"
+}
+```
+
+### Get Current Price for a Token
+
+```json
+{
+  "tool": "polymarket_trade",
+  "action": "get_price",
+  "token_id": "1234567890..."
+}
+```
+
+Returns midpoint, best bid/ask, spread, and orderbook depth.
 
 ---
 
@@ -38,52 +99,29 @@ You can trade on Polymarket prediction markets using the `polymarket_trade` tool
 
 ### Step 1: Find a Market
 
-First, use the `polymarket` skill or `web_fetch` to find markets:
+Use the discovery actions to find markets:
 
 ```json
 {
-  "tool": "web_fetch",
-  "url": "https://gamma-api.polymarket.com/events?active=true&limit=10",
-  "extract_mode": "raw"
+  "tool": "polymarket_trade",
+  "action": "search_markets",
+  "query": "election"
 }
 ```
 
-Or search by topic:
-```json
-{
-  "tool": "web_fetch",
-  "url": "https://gamma-api.polymarket.com/events?active=true&_q=bitcoin",
-  "extract_mode": "raw"
-}
-```
+### Step 2: Get Price Details
 
-### Step 2: Get Market Details & Token ID
-
-From the market data, extract:
-- **token_id**: The `conditionId` or outcome token ID
-- **Current price**: Use CLOB API to get best bid/ask
+Once you have a token_id from the market results:
 
 ```json
 {
-  "tool": "web_fetch",
-  "url": "https://clob.polymarket.com/book?token_id=<TOKEN_ID>",
-  "extract_mode": "raw"
+  "tool": "polymarket_trade",
+  "action": "get_price",
+  "token_id": "<TOKEN_ID>"
 }
 ```
 
-### Step 3: Check Spread & Liquidity
-
-Before placing an order, check the orderbook spread:
-
-```json
-{
-  "tool": "web_fetch",
-  "url": "https://clob.polymarket.com/spread?token_id=<TOKEN_ID>",
-  "extract_mode": "raw"
-}
-```
-
-### Step 4: Place Order
+### Step 3: Place Order
 
 Use the `polymarket_trade` tool:
 
@@ -110,19 +148,58 @@ Use the `polymarket_trade` tool:
 
 ## Tool Actions Reference
 
-### Place Order
+### Discovery Actions (No Wallet Required)
+
+| Action | Parameters | Description |
+|--------|-----------|-------------|
+| `search_markets` | query, tag?, limit? | Search markets by keyword |
+| `trending_markets` | tag?, limit? | Get high-volume markets |
+| `get_market` | slug | Get market details by URL slug |
+| `get_price` | token_id | Get current price and orderbook |
+
+### Trading Actions (Wallet Required)
+
+| Action | Parameters | Description |
+|--------|-----------|-------------|
+| `place_order` | token_id, side, price, size | Place limit order |
+| `cancel_order` | order_id | Cancel specific order |
+| `cancel_all` | - | Cancel all open orders |
+| `get_orders` | - | List open orders |
+| `get_positions` | - | Get current holdings |
+| `get_balance` | - | Get USDC balance |
+
+### Example: Search Markets
+```json
+{
+  "tool": "polymarket_trade",
+  "action": "search_markets",
+  "query": "fed interest rate",
+  "limit": 5
+}
+```
+
+### Example: Get Price
+```json
+{
+  "tool": "polymarket_trade",
+  "action": "get_price",
+  "token_id": "1234567890..."
+}
+```
+
+### Example: Place Order
 ```json
 {
   "tool": "polymarket_trade",
   "action": "place_order",
-  "token_id": "0x...",
+  "token_id": "1234567890...",
   "side": "buy",
   "price": 0.55,
   "size": 50
 }
 ```
 
-### Get Open Orders
+### Example: Get Open Orders
 ```json
 {
   "tool": "polymarket_trade",
@@ -130,16 +207,7 @@ Use the `polymarket_trade` tool:
 }
 ```
 
-### Cancel Specific Order
-```json
-{
-  "tool": "polymarket_trade",
-  "action": "cancel_order",
-  "order_id": "order-uuid-here"
-}
-```
-
-### Cancel All Orders
+### Example: Cancel All Orders
 ```json
 {
   "tool": "polymarket_trade",
@@ -147,7 +215,7 @@ Use the `polymarket_trade` tool:
 }
 ```
 
-### Get Current Positions
+### Example: Get Positions
 ```json
 {
   "tool": "polymarket_trade",
@@ -155,19 +223,11 @@ Use the `polymarket_trade` tool:
 }
 ```
 
-### Get Balance Info
+### Example: Get Balance
 ```json
 {
   "tool": "polymarket_trade",
   "action": "get_balance"
-}
-```
-
-### Setup Token Approvals (One-Time)
-```json
-{
-  "tool": "polymarket_trade",
-  "action": "approve_tokens"
 }
 ```
 

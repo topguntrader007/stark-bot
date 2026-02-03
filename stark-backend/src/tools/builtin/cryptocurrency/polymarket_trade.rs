@@ -3,14 +3,19 @@
 //! Enables trading on Polymarket prediction markets using the polymarket-client-sdk.
 //! Uses the burner wallet private key for signing EIP-712 orders.
 //!
-//! ## Actions
+//! ## Discovery Actions (no auth required)
+//! - `search_markets`: Search markets by keyword
+//! - `trending_markets`: Get popular/high-volume markets
+//! - `get_market`: Get market details by slug
+//! - `get_price`: Get current price/orderbook for a token_id
+//!
+//! ## Trading Actions (requires wallet)
 //! - `place_order`: Place a limit order on a market
 //! - `cancel_order`: Cancel a specific order by ID
 //! - `cancel_all`: Cancel all open orders
 //! - `get_orders`: List open orders
 //! - `get_positions`: Get current positions and balances
 //! - `get_balance`: Get USDC balance and allowances on Polygon
-//! - `approve_tokens`: One-time approval for USDC and CTF tokens
 
 use crate::tools::registry::Tool;
 use crate::tools::types::{
@@ -60,10 +65,16 @@ impl PolymarketTradeTool {
             "action".to_string(),
             PropertySchema {
                 schema_type: "string".to_string(),
-                description: "Action to perform: place_order, cancel_order, cancel_all, get_orders, get_positions, get_balance".to_string(),
+                description: "Action: search_markets, trending_markets, get_market, get_price (discovery) | place_order, cancel_order, cancel_all, get_orders, get_positions, get_balance (trading)".to_string(),
                 default: None,
                 items: None,
                 enum_values: Some(vec![
+                    // Discovery actions
+                    "search_markets".to_string(),
+                    "trending_markets".to_string(),
+                    "get_market".to_string(),
+                    "get_price".to_string(),
+                    // Trading actions
                     "place_order".to_string(),
                     "cancel_order".to_string(),
                     "cancel_all".to_string(),
@@ -74,11 +85,65 @@ impl PolymarketTradeTool {
             },
         );
 
+        // Discovery parameters
+        properties.insert(
+            "query".to_string(),
+            PropertySchema {
+                schema_type: "string".to_string(),
+                description: "Search query for finding markets (e.g., 'bitcoin', 'election'). Used with search_markets.".to_string(),
+                default: None,
+                items: None,
+                enum_values: None,
+            },
+        );
+
+        properties.insert(
+            "slug".to_string(),
+            PropertySchema {
+                schema_type: "string".to_string(),
+                description: "Market slug (URL identifier) for get_market action (e.g., 'will-bitcoin-hit-100k-in-2025').".to_string(),
+                default: None,
+                items: None,
+                enum_values: None,
+            },
+        );
+
+        properties.insert(
+            "tag".to_string(),
+            PropertySchema {
+                schema_type: "string".to_string(),
+                description: "Filter by category tag: politics, crypto, sports, finance, science, entertainment, world.".to_string(),
+                default: None,
+                items: None,
+                enum_values: Some(vec![
+                    "politics".to_string(),
+                    "crypto".to_string(),
+                    "sports".to_string(),
+                    "finance".to_string(),
+                    "science".to_string(),
+                    "entertainment".to_string(),
+                    "world".to_string(),
+                ]),
+            },
+        );
+
+        properties.insert(
+            "limit".to_string(),
+            PropertySchema {
+                schema_type: "integer".to_string(),
+                description: "Max number of results to return (default: 10, max: 50).".to_string(),
+                default: Some(json!(10)),
+                items: None,
+                enum_values: None,
+            },
+        );
+
+        // Trading parameters
         properties.insert(
             "token_id".to_string(),
             PropertySchema {
                 schema_type: "string".to_string(),
-                description: "Token ID (condition_id) of the market outcome. Required for place_order.".to_string(),
+                description: "Token ID (condition_id) of the market outcome. Required for place_order and get_price.".to_string(),
                 default: None,
                 items: None,
                 enum_values: None,
@@ -143,7 +208,7 @@ impl PolymarketTradeTool {
         PolymarketTradeTool {
             definition: ToolDefinition {
                 name: "polymarket_trade".to_string(),
-                description: "Trade on Polymarket prediction markets. Place bets, manage orders, and check positions. Requires BURNER_WALLET_BOT_PRIVATE_KEY with USDC on Polygon.".to_string(),
+                description: "Explore and trade on Polymarket prediction markets. Discovery: search_markets, trending_markets, get_market, get_price. Trading: place_order, cancel_order, get_orders, get_positions, get_balance. Trading requires BURNER_WALLET_BOT_PRIVATE_KEY with USDC on Polygon.".to_string(),
                 input_schema: ToolInputSchema {
                     schema_type: "object".to_string(),
                     properties,
@@ -491,11 +556,286 @@ impl PolymarketTradeTool {
             Err(e) => ToolResult::error(format!("Failed to fetch balance: {}", e))
         }
     }
+
+    // ==================== DISCOVERY METHODS ====================
+
+    /// Search markets by keyword
+    async fn search_markets(&self, params: &PolymarketParams) -> ToolResult {
+        let query = params.query.as_deref().unwrap_or("");
+        let limit = params.limit.unwrap_or(10).min(50);
+        let tag = params.tag.as_deref();
+
+        let http_client = reqwest::Client::new();
+
+        // Build URL with query params
+        let mut url = format!(
+            "https://gamma-api.polymarket.com/events?active=true&closed=false&limit={}",
+            limit
+        );
+
+        if !query.is_empty() {
+            url.push_str(&format!("&_q={}", urlencoding::encode(query)));
+        }
+
+        if let Some(t) = tag {
+            url.push_str(&format!("&tag={}", t));
+        }
+
+        match http_client.get(&url).send().await {
+            Ok(response) => {
+                match response.json::<Value>().await {
+                    Ok(events) => {
+                        // Transform events into a more useful format
+                        let markets = Self::transform_events_to_markets(&events);
+
+                        let result = json!({
+                            "status": "success",
+                            "query": query,
+                            "tag": tag,
+                            "count": markets.len(),
+                            "markets": markets,
+                            "note": "Use token_id with place_order to trade. Use get_price to check current prices."
+                        });
+                        ToolResult::success(serde_json::to_string_pretty(&result).unwrap())
+                    }
+                    Err(e) => ToolResult::error(format!("Failed to parse markets: {}", e))
+                }
+            }
+            Err(e) => ToolResult::error(format!("Failed to search markets: {}", e))
+        }
+    }
+
+    /// Get trending/popular markets
+    async fn trending_markets(&self, params: &PolymarketParams) -> ToolResult {
+        let limit = params.limit.unwrap_or(10).min(50);
+        let tag = params.tag.as_deref();
+
+        let http_client = reqwest::Client::new();
+
+        // Get markets sorted by volume (trending)
+        let mut url = format!(
+            "https://gamma-api.polymarket.com/events?active=true&closed=false&limit={}&order=volume&ascending=false",
+            limit
+        );
+
+        if let Some(t) = tag {
+            url.push_str(&format!("&tag={}", t));
+        }
+
+        match http_client.get(&url).send().await {
+            Ok(response) => {
+                match response.json::<Value>().await {
+                    Ok(events) => {
+                        let markets = Self::transform_events_to_markets(&events);
+
+                        let result = json!({
+                            "status": "success",
+                            "type": "trending",
+                            "tag": tag,
+                            "count": markets.len(),
+                            "markets": markets,
+                            "note": "Markets sorted by trading volume. Use token_id with place_order to trade."
+                        });
+                        ToolResult::success(serde_json::to_string_pretty(&result).unwrap())
+                    }
+                    Err(e) => ToolResult::error(format!("Failed to parse markets: {}", e))
+                }
+            }
+            Err(e) => ToolResult::error(format!("Failed to fetch trending markets: {}", e))
+        }
+    }
+
+    /// Get market details by slug
+    async fn get_market(&self, params: &PolymarketParams) -> ToolResult {
+        let slug = match &params.slug {
+            Some(s) => s,
+            None => return ToolResult::error("slug is required for get_market (e.g., 'will-bitcoin-hit-100k')"),
+        };
+
+        let http_client = reqwest::Client::new();
+        let url = format!("https://gamma-api.polymarket.com/events?slug={}", slug);
+
+        match http_client.get(&url).send().await {
+            Ok(response) => {
+                match response.json::<Value>().await {
+                    Ok(events) => {
+                        // Events is an array, get first match
+                        if let Some(event) = events.as_array().and_then(|arr| arr.first()) {
+                            let market_info = Self::transform_single_event(event);
+
+                            let result = json!({
+                                "status": "success",
+                                "market": market_info,
+                                "note": "Use the token_id values with place_order to trade specific outcomes."
+                            });
+                            ToolResult::success(serde_json::to_string_pretty(&result).unwrap())
+                        } else {
+                            ToolResult::error(format!("Market not found with slug: {}", slug))
+                        }
+                    }
+                    Err(e) => ToolResult::error(format!("Failed to parse market: {}", e))
+                }
+            }
+            Err(e) => ToolResult::error(format!("Failed to fetch market: {}", e))
+        }
+    }
+
+    /// Get current price and orderbook for a token
+    async fn get_price(&self, params: &PolymarketParams) -> ToolResult {
+        let token_id = match &params.token_id {
+            Some(t) => t,
+            None => return ToolResult::error("token_id is required for get_price"),
+        };
+
+        let http_client = reqwest::Client::new();
+
+        // Fetch midpoint, spread, and orderbook in parallel
+        let midpoint_url = format!("https://clob.polymarket.com/midpoint?token_id={}", token_id);
+        let spread_url = format!("https://clob.polymarket.com/spread?token_id={}", token_id);
+        let book_url = format!("https://clob.polymarket.com/book?token_id={}", token_id);
+
+        let (midpoint_res, spread_res, book_res) = tokio::join!(
+            http_client.get(&midpoint_url).send(),
+            http_client.get(&spread_url).send(),
+            http_client.get(&book_url).send()
+        );
+
+        // Parse responses
+        let midpoint: Option<Value> = match midpoint_res {
+            Ok(r) => r.json().await.ok(),
+            Err(_) => None,
+        };
+        let spread: Option<Value> = match spread_res {
+            Ok(r) => r.json().await.ok(),
+            Err(_) => None,
+        };
+        let book: Option<Value> = match book_res {
+            Ok(r) => r.json().await.ok(),
+            Err(_) => None,
+        };
+
+        // Extract best bid/ask from orderbook
+        let best_bid = book.as_ref()
+            .and_then(|b| b.get("bids"))
+            .and_then(|bids| bids.as_array())
+            .and_then(|arr| arr.first())
+            .and_then(|bid| bid.get("price"))
+            .and_then(|p| p.as_str())
+            .unwrap_or("N/A");
+
+        let best_ask = book.as_ref()
+            .and_then(|b| b.get("asks"))
+            .and_then(|asks| asks.as_array())
+            .and_then(|arr| arr.first())
+            .and_then(|ask| ask.get("price"))
+            .and_then(|p| p.as_str())
+            .unwrap_or("N/A");
+
+        let mid = midpoint.as_ref()
+            .and_then(|m| m.get("mid"))
+            .and_then(|p| p.as_str())
+            .unwrap_or("N/A");
+
+        let result = json!({
+            "status": "success",
+            "token_id": token_id,
+            "price": {
+                "midpoint": mid,
+                "best_bid": best_bid,
+                "best_ask": best_ask,
+                "spread": spread,
+            },
+            "orderbook_summary": {
+                "bids": book.as_ref().and_then(|b| b.get("bids")).and_then(|b| b.as_array()).map(|a| a.len()).unwrap_or(0),
+                "asks": book.as_ref().and_then(|b| b.get("asks")).and_then(|a| a.as_array()).map(|a| a.len()).unwrap_or(0),
+            },
+            "note": "Prices are 0-1 representing probability. Use this token_id with place_order to trade."
+        });
+        ToolResult::success(serde_json::to_string_pretty(&result).unwrap())
+    }
+
+    // ==================== HELPER METHODS ====================
+
+    /// Transform Gamma API events response into a cleaner market list
+    fn transform_events_to_markets(events: &Value) -> Vec<Value> {
+        let empty_vec = vec![];
+        let events_arr = events.as_array().unwrap_or(&empty_vec);
+
+        events_arr.iter().filter_map(|event| {
+            Self::transform_single_event(event)
+        }).collect()
+    }
+
+    /// Transform a single event into market info
+    fn transform_single_event(event: &Value) -> Option<Value> {
+        let title = event.get("title")?.as_str()?;
+        let slug = event.get("slug").and_then(|s| s.as_str()).unwrap_or("");
+        let description = event.get("description").and_then(|d| d.as_str()).unwrap_or("");
+        let end_date = event.get("endDate").and_then(|d| d.as_str()).unwrap_or("");
+        let volume = event.get("volume").and_then(|v| v.as_str()).unwrap_or("0");
+        let liquidity = event.get("liquidity").and_then(|l| l.as_str()).unwrap_or("0");
+
+        // Extract markets/outcomes
+        let markets = event.get("markets").and_then(|m| m.as_array())?;
+
+        let outcomes: Vec<Value> = markets.iter().filter_map(|market| {
+            let question = market.get("question").and_then(|q| q.as_str()).unwrap_or("");
+            let condition_id = market.get("conditionId").and_then(|c| c.as_str()).unwrap_or("");
+            let outcome_prices = market.get("outcomePrices").and_then(|p| p.as_str()).unwrap_or("[]");
+            let outcomes = market.get("outcomes").and_then(|o| o.as_str()).unwrap_or("[]");
+
+            // Parse outcome prices
+            let prices: Vec<&str> = outcome_prices.trim_matches(|c| c == '[' || c == ']')
+                .split(',')
+                .map(|s| s.trim().trim_matches('"'))
+                .collect();
+
+            let outcome_names: Vec<&str> = outcomes.trim_matches(|c| c == '[' || c == ']')
+                .split(',')
+                .map(|s| s.trim().trim_matches('"'))
+                .collect();
+
+            // Get individual token IDs for each outcome
+            let tokens = market.get("clobTokenIds").and_then(|t| t.as_str()).unwrap_or("[]");
+            let token_ids: Vec<&str> = tokens.trim_matches(|c| c == '[' || c == ']')
+                .split(',')
+                .map(|s| s.trim().trim_matches('"'))
+                .collect();
+
+            Some(json!({
+                "question": question,
+                "condition_id": condition_id,
+                "outcomes": outcome_names.iter().enumerate().map(|(i, name)| {
+                    json!({
+                        "name": name,
+                        "price": prices.get(i).unwrap_or(&"N/A"),
+                        "token_id": token_ids.get(i).unwrap_or(&"")
+                    })
+                }).collect::<Vec<Value>>()
+            }))
+        }).collect();
+
+        Some(json!({
+            "title": title,
+            "slug": slug,
+            "description": description.chars().take(200).collect::<String>(),
+            "end_date": end_date,
+            "volume": volume,
+            "liquidity": liquidity,
+            "outcomes": outcomes
+        }))
+    }
 }
 
 #[derive(Debug, Deserialize)]
 struct PolymarketParams {
     action: String,
+    // Discovery params
+    query: Option<String>,
+    slug: Option<String>,
+    tag: Option<String>,
+    limit: Option<u32>,
+    // Trading params
     token_id: Option<String>,
     side: Option<String>,
     price: Option<f64>,
@@ -517,6 +857,12 @@ impl Tool for PolymarketTradeTool {
         };
 
         match params.action.as_str() {
+            // Discovery actions (no auth required)
+            "search_markets" => self.search_markets(&params).await,
+            "trending_markets" => self.trending_markets(&params).await,
+            "get_market" => self.get_market(&params).await,
+            "get_price" => self.get_price(&params).await,
+            // Trading actions (require wallet)
             "place_order" => self.place_order(&params).await,
             "cancel_order" => self.cancel_order(&params).await,
             "cancel_all" => self.cancel_all().await,
@@ -524,7 +870,7 @@ impl Tool for PolymarketTradeTool {
             "get_positions" => self.get_positions().await,
             "get_balance" => self.get_balance().await,
             _ => ToolResult::error(format!(
-                "Unknown action: '{}'. Valid actions: place_order, cancel_order, cancel_all, get_orders, get_positions, get_balance",
+                "Unknown action: '{}'. Discovery: search_markets, trending_markets, get_market, get_price. Trading: place_order, cancel_order, cancel_all, get_orders, get_positions, get_balance",
                 params.action
             )),
         }

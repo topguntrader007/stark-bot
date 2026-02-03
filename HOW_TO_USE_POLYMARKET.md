@@ -38,33 +38,49 @@ Or manually approve via `web3_function_call` on Polygon:
 
 ## Basic Usage
 
-### Check Your Balance
+### Browse Markets (No Wallet Needed!)
 
-```
-You: "What's my Polymarket balance?"
-Bot: Uses polymarket_trade with action=get_balance
-```
-
-Returns your USDC balance and token allowances on Polygon.
-
-### Browse Markets
+Market discovery works without any wallet setup:
 
 ```
 You: "Show me trending prediction markets"
-Bot: Uses web_fetch to query gamma-api.polymarket.com
+Bot: Uses polymarket_trade action=trending_markets
 ```
 
 ```
 You: "Find markets about Bitcoin"
-Bot: Searches Polymarket for Bitcoin-related markets
+Bot: Uses polymarket_trade action=search_markets query="bitcoin"
 ```
 
-### Get Market Prices
+```
+You: "What crypto markets are available?"
+Bot: Uses polymarket_trade action=search_markets tag="crypto"
+```
+
+### Get Market Details
 
 ```
-You: "What's the current price on the Trump vs Biden market?"
-Bot: Fetches orderbook and midpoint price from CLOB API
+You: "Tell me about the Bitcoin 100k market"
+Bot: Uses polymarket_trade action=get_market slug="will-bitcoin-hit-100k"
 ```
+
+### Get Current Prices
+
+```
+You: "What's the current price on that market?"
+Bot: Uses polymarket_trade action=get_price token_id="..."
+```
+
+Returns midpoint price, best bid/ask, spread, and orderbook depth.
+
+### Check Your Balance (Requires Wallet)
+
+```
+You: "What's my Polymarket balance?"
+Bot: Uses polymarket_trade action=get_balance
+```
+
+Returns your USDC balance and token allowances on Polygon.
 
 ### Place a Bet
 
@@ -131,12 +147,21 @@ Polymarket prices represent **implied probability**:
 
 ### polymarket_trade
 
-The main tool for trading operations.
+The main tool for market discovery and trading.
 
-#### Actions
+#### Discovery Actions (No Wallet Required)
 
-| Action | Required Params | Description |
-|--------|----------------|-------------|
+| Action | Parameters | Description |
+|--------|-----------|-------------|
+| `search_markets` | query, tag?, limit? | Search markets by keyword |
+| `trending_markets` | tag?, limit? | Get high-volume/popular markets |
+| `get_market` | slug | Get market details by URL slug |
+| `get_price` | token_id | Get current price/orderbook |
+
+#### Trading Actions (Wallet Required)
+
+| Action | Parameters | Description |
+|--------|-----------|-------------|
 | `place_order` | token_id, side, price, size | Place a limit order |
 | `cancel_order` | order_id | Cancel specific order |
 | `cancel_all` | - | Cancel all open orders |
@@ -144,7 +169,16 @@ The main tool for trading operations.
 | `get_positions` | - | Get current holdings |
 | `get_balance` | - | Get USDC balance and allowances |
 
-#### Place Order Parameters
+#### Discovery Parameters
+
+| Param | Type | Description |
+|-------|------|-------------|
+| `query` | string | Search keyword (e.g., "bitcoin", "election") |
+| `slug` | string | Market URL slug (e.g., "will-bitcoin-hit-100k") |
+| `tag` | string | Category filter: politics, crypto, sports, finance, science, entertainment, world |
+| `limit` | integer | Max results (default: 10, max: 50) |
+
+#### Trading Parameters
 
 | Param | Type | Description |
 |-------|------|-------------|
@@ -154,7 +188,28 @@ The main tool for trading operations.
 | `size` | number | Number of shares |
 | `order_type` | string | `GTC` (default), `FOK`, or `GTD` |
 
-#### Example Tool Call
+#### Example: Search Markets
+
+```json
+{
+  "tool": "polymarket_trade",
+  "action": "search_markets",
+  "query": "bitcoin",
+  "limit": 5
+}
+```
+
+#### Example: Get Price
+
+```json
+{
+  "tool": "polymarket_trade",
+  "action": "get_price",
+  "token_id": "1234567890..."
+}
+```
+
+#### Example: Place Order
 
 ```json
 {
