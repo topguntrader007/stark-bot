@@ -1,12 +1,14 @@
 //! Cryptocurrency and Web3 tools
 //!
 //! Tools for interacting with blockchain networks, EVM transactions,
-//! token operations, and x402 payment protocol.
+//! token operations, x402 payment protocol, and prediction markets.
 
 mod broadcast_web3_tx;
 mod decode_calldata;
+mod dexscreener;
 mod list_queued_web3_tx;
 pub mod network_lookup;
+mod polymarket_trade;
 mod register_set;
 mod to_raw_amount;
 pub mod token_lookup;
@@ -19,8 +21,10 @@ mod x402_rpc;
 
 pub use broadcast_web3_tx::BroadcastWeb3TxTool;
 pub use decode_calldata::DecodeCalldataTool;
+pub use dexscreener::DexScreenerTool;
 pub use list_queued_web3_tx::ListQueuedWeb3TxTool;
 pub use network_lookup::load_networks;
+pub use polymarket_trade::PolymarketTradeTool;
 pub use register_set::RegisterSetTool;
 pub use to_raw_amount::ToRawAmountTool;
 pub use token_lookup::{load_tokens, TokenLookupTool};

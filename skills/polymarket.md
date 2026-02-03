@@ -1,12 +1,12 @@
 ---
 name: polymarket
-description: "Interact with Polymarket prediction markets - browse markets, get prices, orderbooks, and market data."
-version: 1.0.0
+description: "Browse Polymarket prediction markets - search markets, get prices, orderbooks, and market data (read-only)."
+version: 1.1.0
 author: starkbot
 homepage: https://docs.polymarket.com/
 metadata: {"clawdbot":{"emoji":"📊"}}
 requires_tools: [web_fetch]
-tags: [polymarket, prediction-markets, trading, crypto, defi, markets, prices]
+tags: [polymarket, prediction-markets, markets, prices, research]
 arguments:
   market_id:
     description: "Polymarket market/token ID (condition_id or token_id)"
@@ -19,9 +19,13 @@ arguments:
     required: false
 ---
 
-# Polymarket Operations Guide
+# Polymarket Market Data Guide
 
-You have access to Polymarket's prediction market data through the `web_fetch` tool. Polymarket is a decentralized prediction market platform on the Polygon blockchain.
+This skill provides **read-only** access to Polymarket market data via the `web_fetch` tool.
+
+> **Want to place trades?** Use the `polymarket_trading` skill which provides the `polymarket_trade` tool for placing orders, managing positions, and executing trades.
+
+Polymarket is a decentralized prediction market platform on the Polygon blockchain.
 
 ## API Base URLs
 

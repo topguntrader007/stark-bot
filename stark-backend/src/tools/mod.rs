@@ -50,6 +50,10 @@ fn register_all_tools(registry: &mut ToolRegistry) {
     registry.register(Arc::new(builtin::TokenLookupTool::new()));
     registry.register(Arc::new(builtin::ToRawAmountTool::new()));
     registry.register(Arc::new(builtin::RegisterSetTool::new()));
+    // Polymarket prediction market trading
+    registry.register(Arc::new(builtin::PolymarketTradeTool::new()));
+    // DexScreener for token/pair market data
+    registry.register(Arc::new(builtin::DexScreenerTool::new()));
 
     // Filesystem tools (read-only, shared)
     registry.register(Arc::new(builtin::ReadFileTool::new()));
