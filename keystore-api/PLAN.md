@@ -57,7 +57,7 @@ Start SIWE authentication by requesting a challenge message.
 **Request:**
 ```json
 {
-  "address": "0x742d35Cc6634C0532925a3b844Bc454e4438f44e"
+  "address": "0x79C62Ff1eE7A0fb038A73fc358DA4306C15CaB6C"
 }
 ```
 
