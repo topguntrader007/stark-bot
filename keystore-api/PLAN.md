@@ -65,7 +65,7 @@ Start SIWE authentication by requesting a challenge message.
 ```json
 {
   "success": true,
-  "message": "keystore.defirelay.com wants you to sign in with your Ethereum account:\n0x742d35Cc6634C0532925a3b844Bc454e4438f44e\n\nSign in to Keystore API\n\nURI: https://keystore.defirelay.com\nVersion: 1\nChain ID: 1\nNonce: abc123xyz\nIssued At: 2026-02-01T12:00:00.000Z",
+  "message": "keystore.defirelay.com wants you to sign in with your Ethereum account:\n0x79C62Ff1eE7A0fb038A73fc358DA4306C15CaB6C\n\nSign in to Keystore API\n\nURI: https://keystore.defirelay.com\nVersion: 1\nChain ID: 1\nNonce: abc123xyz\nIssued At: 2026-02-01T12:00:00.000Z",
   "nonce": "abc123xyz"
 }
 ```
@@ -79,7 +79,7 @@ Complete authentication by submitting the signed message.
 **Request:**
 ```json
 {
-  "address": "0x742d35Cc6634C0532925a3b844Bc454e4438f44e",
+  "address": "0x79C62Ff1eE7A0fb038A73fc358DA4306C15CaB6C",
   "signature": "0x1234abcd..."
 }
 ```
