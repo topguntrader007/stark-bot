@@ -239,6 +239,111 @@ async fn get_linked_identities(
     }
 }
 
+/// Get activity logs for an identity (sessions, tool calls)
+async fn get_identity_logs(
+    data: web::Data<AppState>,
+    req: HttpRequest,
+    path: web::Path<String>,
+) -> impl Responder {
+    if let Err(resp) = validate_session_from_request(&data, &req) {
+        return resp;
+    }
+    let identity_id = path.into_inner();
+
+    // Get linked accounts first
+    let linked_accounts = match data.db.get_linked_identities(&identity_id) {
+        Ok(links) if !links.is_empty() => links,
+        Ok(_) => {
+            return HttpResponse::NotFound().json(serde_json::json!({
+                "error": "Identity not found"
+            }));
+        }
+        Err(e) => {
+            log::error!("Failed to get linked identities: {}", e);
+            return HttpResponse::InternalServerError().json(serde_json::json!({
+                "error": format!("Database error: {}", e)
+            }));
+        }
+    };
+
+    // Get sessions for this identity
+    let sessions = match data.db.get_sessions_for_identity(&identity_id) {
+        Ok(s) => s,
+        Err(e) => {
+            log::error!("Failed to get sessions for identity: {}", e);
+            return HttpResponse::InternalServerError().json(serde_json::json!({
+                "error": format!("Database error: {}", e)
+            }));
+        }
+    };
+
+    // Get message counts for each session
+    let mut sessions_with_counts: Vec<serde_json::Value> = vec![];
+    for session in &sessions {
+        let message_count = data.db.count_session_messages(session.id).unwrap_or(0);
+        let initial_query = data.db.get_first_user_message(session.id).ok().flatten();
+
+        sessions_with_counts.push(serde_json::json!({
+            "id": session.id,
+            "session_key": session.session_key,
+            "channel_type": session.channel_type,
+            "channel_id": session.channel_id,
+            "is_active": session.is_active,
+            "completion_status": session.completion_status.as_str(),
+            "message_count": message_count,
+            "initial_query": initial_query,
+            "created_at": session.created_at.to_rfc3339(),
+            "last_activity_at": session.last_activity_at.to_rfc3339(),
+        }));
+    }
+
+    // Get tool stats
+    let tool_stats = match data.db.get_tool_stats_for_identity(&identity_id) {
+        Ok(s) => s,
+        Err(e) => {
+            log::error!("Failed to get tool stats for identity: {}", e);
+            vec![]
+        }
+    };
+
+    // Get recent tool executions
+    let recent_tools = match data.db.get_recent_tool_executions_for_identity(&identity_id, 50) {
+        Ok(t) => t,
+        Err(e) => {
+            log::error!("Failed to get recent tool executions for identity: {}", e);
+            vec![]
+        }
+    };
+
+    let linked_accounts_info: Vec<LinkedAccountInfo> =
+        linked_accounts.iter().map(LinkedAccountInfo::from).collect();
+
+    HttpResponse::Ok().json(serde_json::json!({
+        "identity_id": identity_id,
+        "linked_accounts": linked_accounts_info,
+        "sessions": sessions_with_counts,
+        "session_count": sessions.len(),
+        "tool_stats": tool_stats.iter().map(|(name, total, successful)| {
+            serde_json::json!({
+                "tool_name": name,
+                "total_calls": total,
+                "successful_calls": successful,
+            })
+        }).collect::<Vec<_>>(),
+        "recent_tool_executions": recent_tools.iter().map(|t| {
+            serde_json::json!({
+                "id": t.id,
+                "tool_name": t.tool_name,
+                "parameters": t.parameters,
+                "success": t.success,
+                "result": t.result,
+                "duration_ms": t.duration_ms,
+                "executed_at": t.executed_at,
+            })
+        }).collect::<Vec<_>>(),
+    }))
+}
+
 pub fn config(cfg: &mut web::ServiceConfig) {
     cfg.service(
         web::scope("/api/identities")
@@ -246,6 +351,7 @@ pub fn config(cfg: &mut web::ServiceConfig) {
             .route("", web::post().to(get_or_create_identity))
             .route("/lookup", web::get().to(get_identity))
             .route("/link", web::post().to(link_identity))
-            .route("/{identity_id}", web::get().to(get_linked_identities)),
+            .route("/{identity_id}", web::get().to(get_linked_identities))
+            .route("/{identity_id}/logs", web::get().to(get_identity_logs)),
     );
 }

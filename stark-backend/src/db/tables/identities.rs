@@ -151,17 +151,261 @@ impl Database {
             platform_user_id: row.get(3)?,
             platform_user_name: row.get(4)?,
             is_verified: row.get::<_, i32>(5)? != 0,
-            verified_at: verified_at_str.map(|s| {
+            verified_at: verified_at_str.and_then(|s| {
                 DateTime::parse_from_rfc3339(&s)
-                    .unwrap()
-                    .with_timezone(&Utc)
+                    .ok()
+                    .map(|dt| dt.with_timezone(&Utc))
             }),
             created_at: DateTime::parse_from_rfc3339(&created_at_str)
-                .unwrap()
-                .with_timezone(&Utc),
+                .map(|dt| dt.with_timezone(&Utc))
+                .unwrap_or_else(|_| Utc::now()),
             updated_at: DateTime::parse_from_rfc3339(&updated_at_str)
-                .unwrap()
-                .with_timezone(&Utc),
+                .map(|dt| dt.with_timezone(&Utc))
+                .unwrap_or_else(|_| Utc::now()),
         })
+    }
+
+    /// Get sessions for an identity (by matching session_messages user_id to identity's platform_user_ids)
+    pub fn get_sessions_for_identity(&self, identity_id: &str) -> SqliteResult<Vec<crate::models::ChatSession>> {
+        let conn = self.conn.lock().unwrap();
+
+        // First get all platform_user_ids for this identity
+        let mut stmt = conn.prepare(
+            "SELECT platform_user_id FROM identity_links WHERE identity_id = ?1"
+        )?;
+        let platform_user_ids: Vec<String> = stmt
+            .query_map([identity_id], |row| row.get(0))?
+            .filter_map(|r| r.ok())
+            .collect();
+        drop(stmt);
+
+        if platform_user_ids.is_empty() {
+            return Ok(vec![]);
+        }
+
+        // Build placeholders for IN clause
+        let placeholders: Vec<String> = platform_user_ids.iter().enumerate()
+            .map(|(i, _)| format!("?{}", i + 1))
+            .collect();
+
+        let query = format!(
+            "SELECT DISTINCT cs.id, cs.session_key, cs.agent_id, cs.scope, cs.channel_type, cs.channel_id,
+                    cs.platform_chat_id, cs.is_active, cs.reset_policy, cs.idle_timeout_minutes,
+                    cs.daily_reset_hour, cs.created_at, cs.updated_at, cs.last_activity_at, cs.expires_at,
+                    cs.context_tokens, cs.max_context_tokens, cs.compaction_id, cs.completion_status
+             FROM chat_sessions cs
+             INNER JOIN session_messages sm ON sm.session_id = cs.id
+             WHERE sm.user_id IN ({})
+             ORDER BY cs.last_activity_at DESC
+             LIMIT 100",
+            placeholders.join(", ")
+        );
+
+        let mut stmt = conn.prepare(&query)?;
+
+        use crate::models::{ChatSession, CompletionStatus, ResetPolicy, SessionScope};
+
+        let sessions = stmt
+            .query_map(rusqlite::params_from_iter(platform_user_ids.iter()), |row| {
+                let created_at_str: String = row.get(11)?;
+                let updated_at_str: String = row.get(12)?;
+                let last_activity_str: String = row.get(13)?;
+                let expires_at_str: Option<String> = row.get(14)?;
+                let scope_str: String = row.get(3)?;
+                let reset_policy_str: String = row.get(8)?;
+
+                Ok(ChatSession {
+                    id: row.get(0)?,
+                    session_key: row.get(1)?,
+                    agent_id: row.get(2)?,
+                    scope: SessionScope::from_str(&scope_str).unwrap_or_default(),
+                    channel_type: row.get(4)?,
+                    channel_id: row.get(5)?,
+                    platform_chat_id: row.get(6)?,
+                    is_active: row.get::<_, i32>(7)? != 0,
+                    reset_policy: ResetPolicy::from_str(&reset_policy_str).unwrap_or_default(),
+                    idle_timeout_minutes: row.get(9)?,
+                    daily_reset_hour: row.get(10)?,
+                    created_at: DateTime::parse_from_rfc3339(&created_at_str)
+                        .map(|dt| dt.with_timezone(&Utc))
+                        .unwrap_or_else(|_| Utc::now()),
+                    updated_at: DateTime::parse_from_rfc3339(&updated_at_str)
+                        .map(|dt| dt.with_timezone(&Utc))
+                        .unwrap_or_else(|_| Utc::now()),
+                    last_activity_at: DateTime::parse_from_rfc3339(&last_activity_str)
+                        .map(|dt| dt.with_timezone(&Utc))
+                        .unwrap_or_else(|_| Utc::now()),
+                    expires_at: expires_at_str.and_then(|s| {
+                        DateTime::parse_from_rfc3339(&s)
+                            .ok()
+                            .map(|dt| dt.with_timezone(&Utc))
+                    }),
+                    context_tokens: row.get(15).unwrap_or(0),
+                    max_context_tokens: row.get(16).unwrap_or(100000),
+                    compaction_id: row.get(17).ok(),
+                    completion_status: {
+                        let status_str: String = row.get(18).unwrap_or_else(|_| "active".to_string());
+                        CompletionStatus::from_str(&status_str).unwrap_or_default()
+                    },
+                })
+            })?
+            .filter_map(|r| r.ok())
+            .collect();
+
+        Ok(sessions)
+    }
+
+    /// Get tool execution stats for an identity
+    pub fn get_tool_stats_for_identity(&self, identity_id: &str) -> SqliteResult<Vec<(String, i64, i64)>> {
+        let conn = self.conn.lock().unwrap();
+
+        // Get all platform_user_ids for this identity
+        let mut stmt = conn.prepare(
+            "SELECT platform_user_id FROM identity_links WHERE identity_id = ?1"
+        )?;
+        let platform_user_ids: Vec<String> = stmt
+            .query_map([identity_id], |row| row.get(0))?
+            .filter_map(|r| r.ok())
+            .collect();
+        drop(stmt);
+
+        if platform_user_ids.is_empty() {
+            return Ok(vec![]);
+        }
+
+        // Get session IDs for this identity
+        let placeholders: Vec<String> = platform_user_ids.iter().enumerate()
+            .map(|(i, _)| format!("?{}", i + 1))
+            .collect();
+
+        let query = format!(
+            "SELECT DISTINCT sm.session_id
+             FROM session_messages sm
+             WHERE sm.user_id IN ({})",
+            placeholders.join(", ")
+        );
+
+        let mut stmt = conn.prepare(&query)?;
+        let session_ids: Vec<i64> = stmt
+            .query_map(rusqlite::params_from_iter(platform_user_ids.iter()), |row| row.get(0))?
+            .filter_map(|r| r.ok())
+            .collect();
+        drop(stmt);
+
+        if session_ids.is_empty() {
+            return Ok(vec![]);
+        }
+
+        // Get tool stats for those sessions
+        let session_placeholders: Vec<String> = session_ids.iter().enumerate()
+            .map(|(i, _)| format!("?{}", i + 1))
+            .collect();
+
+        let query = format!(
+            "SELECT tool_name, COUNT(*) as total, SUM(CASE WHEN success = 1 THEN 1 ELSE 0 END) as successful
+             FROM tool_executions
+             WHERE session_id IN ({})
+             GROUP BY tool_name
+             ORDER BY total DESC",
+            session_placeholders.join(", ")
+        );
+
+        let mut stmt = conn.prepare(&query)?;
+        let stats = stmt
+            .query_map(rusqlite::params_from_iter(session_ids.iter()), |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?, row.get::<_, i64>(2)?))
+            })?
+            .filter_map(|r| r.ok())
+            .collect();
+
+        Ok(stats)
+    }
+
+    /// Get recent tool executions for an identity
+    pub fn get_recent_tool_executions_for_identity(
+        &self,
+        identity_id: &str,
+        limit: i32,
+    ) -> SqliteResult<Vec<crate::tools::ToolExecution>> {
+        let conn = self.conn.lock().unwrap();
+
+        // Get all platform_user_ids for this identity
+        let mut stmt = conn.prepare(
+            "SELECT platform_user_id FROM identity_links WHERE identity_id = ?1"
+        )?;
+        let platform_user_ids: Vec<String> = stmt
+            .query_map([identity_id], |row| row.get(0))?
+            .filter_map(|r| r.ok())
+            .collect();
+        drop(stmt);
+
+        if platform_user_ids.is_empty() {
+            return Ok(vec![]);
+        }
+
+        // Get session IDs for this identity
+        let placeholders: Vec<String> = platform_user_ids.iter().enumerate()
+            .map(|(i, _)| format!("?{}", i + 1))
+            .collect();
+
+        let query = format!(
+            "SELECT DISTINCT sm.session_id
+             FROM session_messages sm
+             WHERE sm.user_id IN ({})",
+            placeholders.join(", ")
+        );
+
+        let mut stmt = conn.prepare(&query)?;
+        let session_ids: Vec<i64> = stmt
+            .query_map(rusqlite::params_from_iter(platform_user_ids.iter()), |row| row.get(0))?
+            .filter_map(|r| r.ok())
+            .collect();
+        drop(stmt);
+
+        if session_ids.is_empty() {
+            return Ok(vec![]);
+        }
+
+        // Get recent tool executions for those sessions
+        let session_placeholders: Vec<String> = session_ids.iter().enumerate()
+            .map(|(i, _)| format!("?{}", i + 1))
+            .collect();
+
+        let query = format!(
+            "SELECT id, channel_id, tool_name, parameters, success, result, duration_ms, executed_at
+             FROM tool_executions
+             WHERE session_id IN ({})
+             ORDER BY executed_at DESC
+             LIMIT ?{}",
+            session_placeholders.join(", "),
+            session_ids.len() + 1
+        );
+
+        let mut stmt = conn.prepare(&query)?;
+        let mut params: Vec<Box<dyn rusqlite::ToSql>> = session_ids.iter()
+            .map(|id| Box::new(*id) as Box<dyn rusqlite::ToSql>)
+            .collect();
+        params.push(Box::new(limit));
+
+        use crate::tools::ToolExecution;
+
+        let executions = stmt
+            .query_map(rusqlite::params_from_iter(params.iter().map(|p| p.as_ref())), |row| {
+                let params_str: String = row.get(3)?;
+                Ok(ToolExecution {
+                    id: row.get(0)?,
+                    channel_id: row.get(1)?,
+                    tool_name: row.get(2)?,
+                    parameters: serde_json::from_str(&params_str).unwrap_or_default(),
+                    success: row.get::<_, i32>(4)? != 0,
+                    result: row.get(5)?,
+                    duration_ms: row.get(6)?,
+                    executed_at: row.get(7)?,
+                })
+            })?
+            .filter_map(|r| r.ok())
+            .collect();
+
+        Ok(executions)
     }
 }

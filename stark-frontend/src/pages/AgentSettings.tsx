@@ -1,9 +1,9 @@
 import { useState, useEffect, FormEvent } from 'react';
-import { Save } from 'lucide-react';
+import { Save, Settings } from 'lucide-react';
 import Card, { CardContent, CardHeader, CardTitle } from '@/components/ui/Card';
 import Button from '@/components/ui/Button';
 import Input from '@/components/ui/Input';
-import { getAgentSettings, updateAgentSettings } from '@/lib/api';
+import { getAgentSettings, updateAgentSettings, getBotSettings, updateBotSettings } from '@/lib/api';
 
 const ENDPOINTS = {
   kimi: 'https://kimi.defirelay.com/api/v1/chat/completions',
@@ -27,12 +27,15 @@ export default function AgentSettings() {
   const [maxTokens, setMaxTokens] = useState(40000);
   const [secretKey, setSecretKey] = useState('');
   const [hasExistingSecretKey, setHasExistingSecretKey] = useState(false);
+  const [maxToolIterations, setMaxToolIterations] = useState(50);
   const [isLoading, setIsLoading] = useState(true);
   const [isSaving, setIsSaving] = useState(false);
+  const [isSavingBehavior, setIsSavingBehavior] = useState(false);
   const [message, setMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
 
   useEffect(() => {
     loadSettings();
+    loadBotSettings();
   }, []);
 
   // Lock archetype for known endpoints
@@ -79,6 +82,31 @@ export default function AgentSettings() {
       setMessage({ type: 'error', text: 'Failed to load settings' });
     } finally {
       setIsLoading(false);
+    }
+  };
+
+  const loadBotSettings = async () => {
+    try {
+      const data = await getBotSettings();
+      setMaxToolIterations(data.max_tool_iterations || 50);
+    } catch (err) {
+      console.error('Failed to load bot settings:', err);
+    }
+  };
+
+  const handleBehaviorSubmit = async (e: FormEvent) => {
+    e.preventDefault();
+    setIsSavingBehavior(true);
+    setMessage(null);
+    try {
+      await updateBotSettings({
+        max_tool_iterations: maxToolIterations,
+      });
+      setMessage({ type: 'success', text: 'Agent behavior settings saved successfully' });
+    } catch (err) {
+      setMessage({ type: 'error', text: 'Failed to save agent behavior settings' });
+    } finally {
+      setIsSavingBehavior(false);
     }
   };
 
@@ -246,6 +274,41 @@ export default function AgentSettings() {
                   Maximum tokens for AI response (default: 40,000)
                 </p>
               </div>
+            </CardContent>
+          </Card>
+
+          {/* Agent Behavior Section */}
+          <Card>
+            <CardHeader>
+              <CardTitle className="flex items-center gap-2">
+                <Settings className="w-5 h-5 text-stark-400" />
+                Agent Behavior
+              </CardTitle>
+            </CardHeader>
+            <CardContent>
+              <form onSubmit={handleBehaviorSubmit} className="space-y-4">
+                <div>
+                  <label className="block text-sm font-medium text-slate-300 mb-2">
+                    Max Tool Iterations
+                  </label>
+                  <input
+                    type="number"
+                    min={10}
+                    max={200}
+                    value={maxToolIterations}
+                    onChange={(e) => setMaxToolIterations(parseInt(e.target.value) || 50)}
+                    className="w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded-lg text-white focus:border-stark-500 focus:outline-none"
+                  />
+                  <p className="text-xs text-slate-500 mt-1">
+                    Maximum number of tool calls per request (10-200). Higher values allow for more complex tasks but may take longer.
+                  </p>
+                </div>
+
+                <Button type="submit" isLoading={isSavingBehavior} className="w-fit">
+                  <Save className="w-4 h-4 mr-2" />
+                  Save Agent Settings
+                </Button>
+              </form>
             </CardContent>
           </Card>
 

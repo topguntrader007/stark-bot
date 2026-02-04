@@ -812,16 +812,6 @@ impl PolymarketTradeTool {
         }))
     }
 
-    /// Transform events to full market info (with outcomes - for single market view)
-    fn transform_events_to_markets(events: &Value) -> Vec<Value> {
-        let empty_vec = vec![];
-        let events_arr = events.as_array().unwrap_or(&empty_vec);
-
-        events_arr.iter().filter_map(|event| {
-            Self::transform_single_event(event)
-        }).collect()
-    }
-
     /// Transform a single event into full market info (with outcomes)
     fn transform_single_event(event: &Value) -> Option<Value> {
         let title = event.get("title")?.as_str()?;

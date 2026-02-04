@@ -1,6 +1,6 @@
 ---
 name: dexscreener
-description: "Get DEX token prices, pair info, liquidity data, and trending tokens from DexScreener. Supports all major chains."
+description: "Get DEX token prices, pair info, liquidity data, and trending tokens from DexScreener. Hot, new trending coins"
 version: 1.0.0
 author: starkbot
 homepage: https://docs.dexscreener.com/api/reference

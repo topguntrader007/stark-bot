@@ -12,6 +12,7 @@ import Scheduling from '@/pages/Scheduling';
 import Sessions from '@/pages/Sessions';
 import MemoryBrowser from '@/pages/MemoryBrowser';
 import Identities from '@/pages/Identities';
+import IdentityDetail from '@/pages/IdentityDetail';
 import FileBrowser from '@/pages/FileBrowser';
 import SystemFiles from '@/pages/SystemFiles';
 import Journal from '@/pages/Journal';
@@ -39,6 +40,7 @@ function App() {
         <Route path="/sessions" element={<Sessions />} />
         <Route path="/memories" element={<MemoryBrowser />} />
         <Route path="/identities" element={<Identities />} />
+        <Route path="/identities/:identityId" element={<IdentityDetail />} />
         <Route path="/files" element={<FileBrowser />} />
         <Route path="/system-files" element={<SystemFiles />} />
         <Route path="/journal" element={<Journal />} />

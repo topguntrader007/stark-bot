@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react';
-import { Users } from 'lucide-react';
+import { useNavigate } from 'react-router-dom';
+import { Users, ChevronRight } from 'lucide-react';
 import Card, { CardContent } from '@/components/ui/Card';
 import { getIdentities } from '@/lib/api';
 
@@ -12,6 +13,7 @@ interface Identity {
 }
 
 export default function Identities() {
+  const navigate = useNavigate();
   const [identities, setIdentities] = useState<Identity[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -62,7 +64,11 @@ export default function Identities() {
       {identities.length > 0 ? (
         <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
           {identities.map((identity) => (
-            <Card key={identity.id}>
+            <Card
+              key={identity.id}
+              className="cursor-pointer hover:border-stark-500/50 transition-colors"
+              onClick={() => navigate(`/identities/${identity.id}`)}
+            >
               <CardContent>
                 <div className="flex items-start gap-4">
                   <div className="p-3 bg-purple-500/20 rounded-lg shrink-0">
@@ -82,6 +88,7 @@ export default function Identities() {
                       {formatDate(identity.created_at)}
                     </p>
                   </div>
+                  <ChevronRight className="w-5 h-5 text-slate-500" />
                 </div>
               </CardContent>
             </Card>
